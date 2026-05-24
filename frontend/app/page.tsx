@@ -6,11 +6,24 @@ import Onboarding from '@/components/onboarding';
 import Dashboard from '@/components/dashboard';
 import CaregiverView from '@/components/caregiverview';
 import WellnessModal from '@/components/wellnessmodal';
+import AuthGate from '@/components/authgate';
 import { Activity, Users, Settings, LogOut } from 'lucide-react';
 
 function MainApp() {
-  const { isOnboarded, userProfile, resetApp } = useAppStore();
+  const { isAuthenticated, authLoading, isOnboarded, userProfile, resetApp } = useAppStore();
   const [activeTab, setActiveTab] = useState<'patient' | 'caregiver'>('patient');
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <AuthGate />;
+  }
 
   if (!isOnboarded) {
     return <Onboarding />;

@@ -1,7 +1,8 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { subDays, format, isSameDay } from 'date-fns';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import { subDays } from 'date-fns';
+import { apiFetch, getToken, setToken } from './api';
 
 export type LogStatus = 'taken' | 'missed';
 
@@ -29,7 +30,16 @@ export interface UserProfile {
   };
 }
 
+interface MeResponse {
+  user_id: string;
+  email: string;
+  profile: (UserProfile & { deviceConnected?: boolean; remindMeCount?: number }) | null;
+}
+
 interface AppState {
+  isAuthenticated: boolean;
+  authLoading: boolean;
+  email: string | null;
   isOnboarded: boolean;
   userProfile: UserProfile | null;
   logs: Log[];
@@ -37,8 +47,13 @@ interface AppState {
   deviceConnected: boolean;
   showWellnessModal: boolean;
   pendingLogId: string | null;
-  
-  // Actions
+
+  // Auth actions
+  signup: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+
+  // App actions
   completeOnboarding: (profile: UserProfile) => void;
   logDose: (status: LogStatus) => void;
   remindMeLater: () => void;
@@ -50,30 +65,27 @@ interface AppState {
 
 const AppContext = createContext<AppState | undefined>(undefined);
 
-// Generate 30 days of mock data for the "Aha" moment
+// Generate 30 days of mock data for the "Aha" moment (kept until S3 wires real logs)
 const generateMockLogs = (): Log[] => {
   const logs: Log[] = [];
   const today = new Date();
-  
+
   for (let i = 30; i >= 1; i--) {
     const date = subDays(today, i);
-    // Create a pattern: misses often on Wed/Thu
     const dayOfWeek = date.getDay();
     const isWedOrThu = dayOfWeek === 3 || dayOfWeek === 4;
-    
-    // 80% chance to take normally, but on Wed/Thu it drops to 30%
     const chanceToTake = isWedOrThu ? 0.3 : 0.9;
     const status: LogStatus = Math.random() < chanceToTake ? 'taken' : 'missed';
-    
+
     logs.push({
       id: `mock-${i}`,
       timestamp: date,
       status,
       checkIn: status === 'taken' ? {
-        physical: Math.floor(Math.random() * 2) + 4, // 4-5
+        physical: Math.floor(Math.random() * 2) + 4,
         emotional: Math.floor(Math.random() * 2) + 4,
       } : {
-        physical: Math.floor(Math.random() * 3) + 1, // 1-3
+        physical: Math.floor(Math.random() * 3) + 1,
         emotional: Math.floor(Math.random() * 3) + 1,
       }
     });
@@ -82,6 +94,10 @@ const generateMockLogs = (): Log[] => {
 };
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState<string | null>(null);
+
   const [isOnboarded, setIsOnboarded] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
@@ -90,10 +106,87 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [showWellnessModal, setShowWellnessModal] = useState(false);
   const [pendingLogId, setPendingLogId] = useState<string | null>(null);
 
-  // Load mock data on mount
-  useEffect(() => {
-    setLogs(generateMockLogs());
+  const hydrateFromMe = useCallback((me: MeResponse) => {
+    setIsAuthenticated(true);
+    setEmail(me.email);
+    if (me.profile) {
+      setUserProfile({
+        name: me.profile.name,
+        medication: me.profile.medication,
+        scheduleTime: me.profile.scheduleTime,
+        features: me.profile.features,
+      });
+      setIsOnboarded(true);
+      if (typeof me.profile.deviceConnected === 'boolean') setDeviceConnected(me.profile.deviceConnected);
+      if (typeof me.profile.remindMeCount === 'number') setRemindMeCount(me.profile.remindMeCount);
+    } else {
+      setUserProfile(null);
+      setIsOnboarded(false);
+    }
   }, []);
+
+  // Bootstrap: if we have a token, hydrate via /auth/me
+  useEffect(() => {
+    let cancelled = false;
+    const boot = async () => {
+      const token = getToken();
+      if (!token) {
+        setAuthLoading(false);
+        return;
+      }
+      try {
+        const me = await apiFetch<MeResponse>('/auth/me');
+        if (cancelled) return;
+        hydrateFromMe(me);
+      } catch {
+        setToken(null);
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    };
+    boot();
+    // Seed mock logs until S3 wires real logs
+    setLogs(generateMockLogs());
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrateFromMe]);
+
+  const signup = async (emailVal: string, password: string) => {
+    const res = await apiFetch<{ access_token: string; email: string }>('/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify({ email: emailVal, password }),
+    });
+    setToken(res.access_token);
+    const me = await apiFetch<MeResponse>('/auth/me');
+    hydrateFromMe(me);
+  };
+
+  const login = async (emailVal: string, password: string) => {
+    const res = await apiFetch<{ access_token: string; email: string }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: emailVal, password }),
+    });
+    setToken(res.access_token);
+    const me = await apiFetch<MeResponse>('/auth/me');
+    hydrateFromMe(me);
+  };
+
+  const logout = async () => {
+    try {
+      await apiFetch('/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore; we clear client state regardless
+    }
+    setToken(null);
+    setIsAuthenticated(false);
+    setEmail(null);
+    setIsOnboarded(false);
+    setUserProfile(null);
+    setLogs(generateMockLogs());
+    setRemindMeCount(0);
+    setDeviceConnected(false);
+  };
 
   const completeOnboarding = (profile: UserProfile) => {
     setUserProfile(profile);
@@ -106,10 +199,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       timestamp: new Date(),
       status,
     };
-    
+
     setLogs(prev => [...prev, newLog]);
     setRemindMeCount(0);
-    
+
     if (userProfile?.features.wellnessCheckIns) {
       setPendingLogId(newLog.id);
       setShowWellnessModal(true);
@@ -122,13 +215,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logDose('missed');
     } else {
       setRemindMeCount(newCount);
-      // In a real app, this would schedule a local notification
       console.log(`Reminding in 15 mins. Count: ${newCount}/3`);
     }
   };
 
   const submitCheckIn = (logId: string, checkIn: CheckIn) => {
-    setLogs(prev => prev.map(log => 
+    setLogs(prev => prev.map(log =>
       log.id === logId ? { ...log, checkIn } : log
     ));
     setShowWellnessModal(false);
@@ -145,15 +237,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const resetApp = () => {
-    setIsOnboarded(false);
-    setUserProfile(null);
-    setLogs(generateMockLogs());
-    setRemindMeCount(0);
-    setDeviceConnected(false);
+    // Reset is now an alias for logout — keeps the nav button behavior intact
+    void logout();
   };
 
   return (
     <AppContext.Provider value={{
+      isAuthenticated,
+      authLoading,
+      email,
       isOnboarded,
       userProfile,
       logs,
@@ -161,6 +253,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       deviceConnected,
       showWellnessModal,
       pendingLogId,
+      signup,
+      login,
+      logout,
       completeOnboarding,
       logDose,
       remindMeLater,
@@ -181,4 +276,3 @@ export const useAppStore = () => {
   }
   return context;
 };
-
