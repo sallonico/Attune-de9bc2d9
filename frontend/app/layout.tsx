@@ -32,9 +32,150 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <Script id="route-tracking" strategy="afterInteractive">
+          {`
+(function() {
+  'use strict';
+
+  // Prevent double initialization
+  if (window.__SANDBOX_ROUTE_TRACKING_INITIALIZED__) return;
+  window.__SANDBOX_ROUTE_TRACKING_INITIALIZED__ = true;
+
+  // Track last sent route to prevent duplicates
+  var lastSentRoute = '';
+  var initialRouteSent = false;
+
+  // Detect framework
+  function detectFramework() {
+    if (typeof window !== 'undefined') {
+      if (window.next || document.querySelector('[data-nextjs-scroll-focus-boundary]')) {
+        return 'nextjs';
+      }
+      if (window.React || document.querySelector('[data-reactroot]')) {
+        return 'react';
+      }
+      if (window.Vue || document.querySelector('[data-v-]')) {
+        return 'vue';
+      }
+    }
+    return 'vanilla';
+  }
+
+  var framework = detectFramework();
+
+  // Send route change message to parent
+  function sendRouteChange(path, query) {
+    query = query || '';
+    var fullUrl = path + (query ? '?' + query : '');
+
+    // Skip if same as last sent route (deduplication)
+    if (fullUrl === lastSentRoute) return;
+    lastSentRoute = fullUrl;
+
+    var message = {
+      type: 'sandbox-route-change',
+      path: path,
+      query: query,
+      fullUrl: fullUrl,
+      timestamp: Date.now(),
+      framework: framework
+    };
+
+    try {
+      window.parent.postMessage(message, '*');
+      console.log('[RouteTracking] Sent:', fullUrl);
+    } catch (error) {
+      console.warn('[RouteTracking] Failed to send:', error);
+    }
+  }
+
+  // Send initial route (only once)
+  function sendInitialRoute() {
+    if (initialRouteSent) return;
+    initialRouteSent = true;
+    var path = window.location.pathname;
+    var query = window.location.search.substring(1);
+    sendRouteChange(path, query);
+  }
+
+  // Override history methods to capture programmatic navigation
+  var originalPushState = history.pushState;
+  var originalReplaceState = history.replaceState;
+
+  history.pushState = function() {
+    originalPushState.apply(this, arguments);
+    setTimeout(function() {
+      var path = window.location.pathname;
+      var query = window.location.search.substring(1);
+      sendRouteChange(path, query);
+    }, 0);
+  };
+
+  history.replaceState = function() {
+    originalReplaceState.apply(this, arguments);
+    setTimeout(function() {
+      var path = window.location.pathname;
+      var query = window.location.search.substring(1);
+      sendRouteChange(path, query);
+    }, 0);
+  };
+
+  // Listen for popstate events (back/forward buttons)
+  window.addEventListener('popstate', function() {
+    setTimeout(function() {
+      var path = window.location.pathname;
+      var query = window.location.search.substring(1);
+      sendRouteChange(path, query);
+    }, 0);
+  });
+
+  // For Next.js Pages Router - listen for router events
+  if (framework === 'nextjs' && typeof window !== 'undefined') {
+    var checkForNextRouter = function() {
+      if (window.next && window.next.router && window.next.router.events) {
+        window.next.router.events.on('routeChangeComplete', function(url) {
+          var urlObj = new URL(url, window.location.origin);
+          sendRouteChange(urlObj.pathname, urlObj.search.substring(1));
+        });
+      }
+      // App Router uses history.pushState internally, which we already capture
+    };
+
+    // Check immediately and after a delay (router may not be ready immediately)
+    checkForNextRouter();
+    setTimeout(checkForNextRouter, 1000);
+  }
+
+  // Send ready message
+  try {
+    window.parent.postMessage({
+      type: 'sandbox:ready',
+      framework: framework
+    }, '*');
+    console.log('[RouteTracking] Ready, framework:', framework);
+  } catch (error) {
+    console.warn('[RouteTracking] Failed to send ready message:', error);
+  }
+
+  // Send initial route - use multiple strategies but only send once
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    // Document already loaded, send immediately
+    setTimeout(sendInitialRoute, 50);
+  } else {
+    // Wait for document to be ready
+    document.addEventListener('DOMContentLoaded', sendInitialRoute);
+  }
+
+  // Fallback for edge cases
+  window.addEventListener('load', sendInitialRoute);
+
+})();
+`}
+        </Script>
         <NextTopLoader />
         {children}
       </body>
     </html>
   );
 }
+
