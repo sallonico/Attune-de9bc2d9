@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState } from 'react';
-import { AppProvider, useAppStore } from './lib/store';
-import Onboarding from './components/Onboarding';
-import Dashboard from './components/Dashboard';
-import CaregiverView from './components/CaregiverView';
-import WellnessModal from './components/WellnessModal';
+import { AppProvider, useAppStore } from '../lib/store';
+import Onboarding from '../components/onboarding';
+import Dashboard from '../components/dashboard';
+import CaregiverView from '../components/caregiverview';
+import WellnessModal from '../components/wellnessmodal';
 import { Activity, Users, Settings, LogOut } from 'lucide-react';
 
 function MainApp() {
