@@ -1,3 +1,17 @@
 node_modules
 package-lock.json
 config.bat
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+
+# Next.js
+.next/
+out/
