@@ -54,7 +54,8 @@ interface AppState {
   logout: () => Promise<void>;
 
   // App actions
-  completeOnboarding: (profile: UserProfile) => void;
+  completeOnboarding: (profile: UserProfile) => Promise<void>;
+  updateProfile: (patch: Partial<UserProfile>) => Promise<void>;
   logDose: (status: LogStatus) => void;
   remindMeLater: () => void;
   submitCheckIn: (logId: string, checkIn: CheckIn) => void;
@@ -188,9 +189,39 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setDeviceConnected(false);
   };
 
-  const completeOnboarding = (profile: UserProfile) => {
-    setUserProfile(profile);
+  const completeOnboarding = async (profile: UserProfile) => {
+    const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
+      '/profile',
+      {
+        method: 'POST',
+        body: JSON.stringify(profile),
+      }
+    );
+    setUserProfile({
+      name: res.name,
+      medication: res.medication,
+      scheduleTime: res.scheduleTime,
+      features: res.features,
+    });
+    if (typeof res.deviceConnected === 'boolean') setDeviceConnected(res.deviceConnected);
+    if (typeof res.remindMeCount === 'number') setRemindMeCount(res.remindMeCount);
     setIsOnboarded(true);
+  };
+
+  const updateProfile = async (patch: Partial<UserProfile>) => {
+    const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
+      '/profile',
+      {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      }
+    );
+    setUserProfile({
+      name: res.name,
+      medication: res.medication,
+      scheduleTime: res.scheduleTime,
+      features: res.features,
+    });
   };
 
   const logDose = (status: LogStatus) => {
@@ -257,6 +288,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       login,
       logout,
       completeOnboarding,
+      updateProfile,
       logDose,
       remindMeLater,
       submitCheckIn,

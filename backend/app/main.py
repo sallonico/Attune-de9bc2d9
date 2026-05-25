@@ -26,7 +26,15 @@ async def http_exc_handler(_request, exc: StarletteHTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exc_handler(_request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"error": "validation_error", "details": exc.errors()})
+    details = [
+        {
+            "loc": list(err.get("loc", [])),
+            "msg": err.get("msg", ""),
+            "type": err.get("type", ""),
+        }
+        for err in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"error": "validation_error", "details": details})
 
 
 app.include_router(api_router)

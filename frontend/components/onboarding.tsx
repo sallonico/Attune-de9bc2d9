@@ -2,33 +2,39 @@
 
 import React, { useState } from 'react';
 import { useAppStore } from '../lib/store';
-import { ArrowRight, Check, Pill, Brain, HeartPulse, Users, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, Pill, Brain, HeartPulse, Users, Sparkles, LogOut } from 'lucide-react';
 
 export default function Onboarding() {
-  const { completeOnboarding } = useAppStore();
+  const { completeOnboarding, logout, email } = useAppStore();
   const [step, setStep] = useState(1);
-  
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const [name, setName] = useState('');
   const [medication, setMedication] = useState('');
   const [scheduleTime, setScheduleTime] = useState('08:00');
-  
+
   const [features, setFeatures] = useState({
     aiInsights: true,
     wellnessCheckIns: true,
     caregiverAccess: false,
   });
 
-  const handleNext = () => {
-    if (step === 1 && (!name || !medication)) return;
+  const handleNext = async () => {
+    setError(null);
+    if (step === 1 && !name) return;
+    if (step === 2 && !medication) return;
     if (step < 3) {
       setStep(step + 1);
-    } else {
-      completeOnboarding({
-        name,
-        medication,
-        scheduleTime,
-        features
-      });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await completeOnboarding({ name, medication, scheduleTime, features });
+    } catch (e) {
+      setError((e as Error).message || 'Failed to save profile.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -43,6 +49,19 @@ export default function Onboarding() {
       <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-indigo-500/10 rounded-full blur-[120px]" />
       
       <div className="w-full max-w-xl relative z-10">
+        {/* Top bar: signed-in identity + logout */}
+        <div className="flex items-center justify-between mb-6 text-xs text-slate-400">
+          <span className="truncate max-w-[60%]">{email ? `Signed in as ${email}` : ''}</span>
+          <button
+            onClick={() => void logout()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+            title="Log out"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Log out
+          </button>
+        </div>
+
         {/* Progress Bar */}
         <div className="flex gap-2 mb-8">
           {[1, 2, 3].map((i) => (
@@ -158,13 +177,19 @@ export default function Onboarding() {
             </div>
           )}
 
+          {error && (
+            <p className="mt-6 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3 py-2">
+              {error}
+            </p>
+          )}
+
           <div className="mt-10 flex justify-end">
             <button
               onClick={handleNext}
-              disabled={step === 1 && (!name)}
+              disabled={submitting || (step === 1 && !name) || (step === 2 && !medication)}
               className="group relative overflow-hidden bg-gradient-to-r from-teal-500 to-emerald-500 px-8 py-4 rounded-xl font-semibold text-white shadow-lg shadow-teal-500/25 hover:shadow-xl hover:shadow-teal-500/40 hover:scale-[1.02] transform transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center gap-2"
             >
-              <span className="relative z-10">{step === 3 ? 'Complete Setup' : 'Continue'}</span>
+              <span className="relative z-10">{submitting ? 'Saving...' : step === 3 ? 'Complete Setup' : 'Continue'}</span>
               <ArrowRight className="w-5 h-5 relative z-10 group-hover:translate-x-1 transition-transform" />
               <div className="absolute inset-0 bg-gradient-to-r from-teal-400 to-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
             </button>
