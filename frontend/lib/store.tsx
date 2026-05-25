@@ -1,7 +1,6 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { subDays } from 'date-fns';
 import { apiFetch, getToken, setToken } from './api';
 
 export type LogStatus = 'taken' | 'missed';
@@ -56,8 +55,9 @@ interface AppState {
   // App actions
   completeOnboarding: (profile: UserProfile) => Promise<void>;
   updateProfile: (patch: Partial<UserProfile>) => Promise<void>;
-  logDose: (status: LogStatus) => void;
-  remindMeLater: () => void;
+  logDose: (status: LogStatus) => Promise<void>;
+  remindMeLater: () => Promise<void>;
+  refreshLogs: () => Promise<void>;
   submitCheckIn: (logId: string, checkIn: CheckIn) => void;
   toggleDeviceConnection: () => void;
   skipCheckIn: () => void;
@@ -66,33 +66,19 @@ interface AppState {
 
 const AppContext = createContext<AppState | undefined>(undefined);
 
-// Generate 30 days of mock data for the "Aha" moment (kept until S3 wires real logs)
-const generateMockLogs = (): Log[] => {
-  const logs: Log[] = [];
-  const today = new Date();
+interface ApiLog {
+  id: string;
+  timestamp: string;
+  status: LogStatus;
+  checkIn?: CheckIn;
+}
 
-  for (let i = 30; i >= 1; i--) {
-    const date = subDays(today, i);
-    const dayOfWeek = date.getDay();
-    const isWedOrThu = dayOfWeek === 3 || dayOfWeek === 4;
-    const chanceToTake = isWedOrThu ? 0.3 : 0.9;
-    const status: LogStatus = Math.random() < chanceToTake ? 'taken' : 'missed';
-
-    logs.push({
-      id: `mock-${i}`,
-      timestamp: date,
-      status,
-      checkIn: status === 'taken' ? {
-        physical: Math.floor(Math.random() * 2) + 4,
-        emotional: Math.floor(Math.random() * 2) + 4,
-      } : {
-        physical: Math.floor(Math.random() * 3) + 1,
-        emotional: Math.floor(Math.random() * 3) + 1,
-      }
-    });
-  }
-  return logs;
-};
+const fromApiLog = (l: ApiLog): Log => ({
+  id: l.id,
+  timestamp: new Date(l.timestamp),
+  status: l.status,
+  checkIn: l.checkIn,
+});
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -107,7 +93,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [showWellnessModal, setShowWellnessModal] = useState(false);
   const [pendingLogId, setPendingLogId] = useState<string | null>(null);
 
-  const hydrateFromMe = useCallback((me: MeResponse) => {
+  const refreshLogs = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ logs: ApiLog[] }>('/logs?days=30');
+      setLogs(res.logs.map(fromApiLog));
+    } catch {
+      // ignore — caller decides if it cares
+    }
+  }, []);
+
+  const hydrateFromMe = useCallback(async (me: MeResponse) => {
     setIsAuthenticated(true);
     setEmail(me.email);
     if (me.profile) {
@@ -120,11 +115,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setIsOnboarded(true);
       if (typeof me.profile.deviceConnected === 'boolean') setDeviceConnected(me.profile.deviceConnected);
       if (typeof me.profile.remindMeCount === 'number') setRemindMeCount(me.profile.remindMeCount);
+      await refreshLogs();
     } else {
       setUserProfile(null);
       setIsOnboarded(false);
+      setLogs([]);
     }
-  }, []);
+  }, [refreshLogs]);
 
   // Bootstrap: if we have a token, hydrate via /auth/me
   useEffect(() => {
@@ -138,7 +135,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       try {
         const me = await apiFetch<MeResponse>('/auth/me');
         if (cancelled) return;
-        hydrateFromMe(me);
+        await hydrateFromMe(me);
       } catch {
         setToken(null);
       } finally {
@@ -146,8 +143,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
     };
     boot();
-    // Seed mock logs until S3 wires real logs
-    setLogs(generateMockLogs());
     return () => {
       cancelled = true;
     };
@@ -160,7 +155,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     });
     setToken(res.access_token);
     const me = await apiFetch<MeResponse>('/auth/me');
-    hydrateFromMe(me);
+    await hydrateFromMe(me);
   };
 
   const login = async (emailVal: string, password: string) => {
@@ -170,7 +165,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     });
     setToken(res.access_token);
     const me = await apiFetch<MeResponse>('/auth/me');
-    hydrateFromMe(me);
+    await hydrateFromMe(me);
   };
 
   const logout = async () => {
@@ -184,7 +179,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setEmail(null);
     setIsOnboarded(false);
     setUserProfile(null);
-    setLogs(generateMockLogs());
+    setLogs([]);
     setRemindMeCount(0);
     setDeviceConnected(false);
   };
@@ -224,29 +219,32 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     });
   };
 
-  const logDose = (status: LogStatus) => {
-    const newLog: Log = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date(),
-      status,
-    };
-
-    setLogs(prev => [...prev, newLog]);
+  const logDose = async (status: LogStatus) => {
+    const created = await apiFetch<ApiLog>('/logs', {
+      method: 'POST',
+      body: JSON.stringify({ status }),
+    });
+    const newLog = fromApiLog(created);
+    setLogs(prev => {
+      const others = prev.filter(l => l.id !== newLog.id);
+      return [...others, newLog].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    });
     setRemindMeCount(0);
 
-    if (userProfile?.features.wellnessCheckIns) {
+    if (status === 'taken' && userProfile?.features.wellnessCheckIns) {
       setPendingLogId(newLog.id);
       setShowWellnessModal(true);
     }
   };
 
-  const remindMeLater = () => {
-    const newCount = remindMeCount + 1;
-    if (newCount >= 3) {
-      logDose('missed');
-    } else {
-      setRemindMeCount(newCount);
-      console.log(`Reminding in 15 mins. Count: ${newCount}/3`);
+  const remindMeLater = async () => {
+    const res = await apiFetch<{ remindMeCount: number; autoMissed: boolean }>(
+      '/reminders/remind-later',
+      { method: 'POST' }
+    );
+    setRemindMeCount(res.remindMeCount);
+    if (res.autoMissed) {
+      await refreshLogs();
     }
   };
 
@@ -291,6 +289,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       updateProfile,
       logDose,
       remindMeLater,
+      refreshLogs,
       submitCheckIn,
       toggleDeviceConnection,
       skipCheckIn,
