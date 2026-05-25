@@ -6,22 +6,31 @@ import { HeartPulse, X, ArrowRight } from 'lucide-react';
 
 export default function WellnessModal() {
   const { showWellnessModal, pendingLogId, submitCheckIn, skipCheckIn } = useAppStore();
-  
+
   const [physical, setPhysical] = useState<number>(0);
   const [emotional, setEmotional] = useState<number>(0);
   const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!showWellnessModal || !pendingLogId) return null;
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (physical === 0 || emotional === 0) return;
-    submitCheckIn(pendingLogId, { physical, emotional, note });
-    // Reset state for next time
-    setTimeout(() => {
-      setPhysical(0);
-      setEmotional(0);
-      setNote('');
-    }, 300);
+    setSubmitting(true);
+    setError(null);
+    try {
+      await submitCheckIn(pendingLogId, { physical, emotional, note });
+      setTimeout(() => {
+        setPhysical(0);
+        setEmotional(0);
+        setNote('');
+      }, 300);
+    } catch (e) {
+      setError((e as Error).message || 'Failed to save check-in.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const emojis = [
@@ -123,12 +132,17 @@ export default function WellnessModal() {
 
         {/* Footer */}
         <div className="p-6 pt-0">
+          {error && (
+            <p className="mb-3 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3 py-2">
+              {error}
+            </p>
+          )}
           <button
             onClick={handleSubmit}
-            disabled={physical === 0 || emotional === 0}
+            disabled={physical === 0 || emotional === 0 || submitting}
             className="w-full group relative overflow-hidden bg-gradient-to-r from-rose-500 to-orange-500 px-6 py-4 rounded-xl font-semibold text-white shadow-lg shadow-rose-500/25 hover:shadow-xl hover:shadow-rose-500/40 hover:scale-[1.02] transform transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center justify-center gap-2"
           >
-            <span className="relative z-10">Save Check-in</span>
+            <span className="relative z-10">{submitting ? 'Saving...' : 'Save Check-in'}</span>
             <ArrowRight className="w-5 h-5 relative z-10 group-hover:translate-x-1 transition-transform" />
           </button>
           <button 

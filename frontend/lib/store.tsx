@@ -58,7 +58,7 @@ interface AppState {
   logDose: (status: LogStatus) => Promise<void>;
   remindMeLater: () => Promise<void>;
   refreshLogs: () => Promise<void>;
-  submitCheckIn: (logId: string, checkIn: CheckIn) => void;
+  submitCheckIn: (logId: string, checkIn: CheckIn) => Promise<void>;
   toggleDeviceConnection: () => void;
   skipCheckIn: () => void;
   resetApp: () => void;
@@ -248,10 +248,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const submitCheckIn = (logId: string, checkIn: CheckIn) => {
-    setLogs(prev => prev.map(log =>
-      log.id === logId ? { ...log, checkIn } : log
-    ));
+  const submitCheckIn = async (logId: string, checkIn: CheckIn) => {
+    const updated = await apiFetch<ApiLog>(`/logs/${logId}/check-in`, {
+      method: 'POST',
+      body: JSON.stringify(checkIn),
+    });
+    const updatedLog = fromApiLog(updated);
+    setLogs(prev => prev.map(log => (log.id === updatedLog.id ? updatedLog : log)));
     setShowWellnessModal(false);
     setPendingLogId(null);
   };

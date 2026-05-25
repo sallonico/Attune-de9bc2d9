@@ -1,29 +1,70 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
+import { apiFetch } from '../lib/api';
 import { format, subDays, isSameDay } from 'date-fns';
 import { Brain, CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertCircle, ChevronRight } from 'lucide-react';
 
+interface TrendResponse {
+  days: number;
+  takenCount: number;
+  totalCount: number;
+  trendPercentage: number;
+}
+
+interface InsightResponse {
+  detected: boolean;
+  message: string;
+  evidence: { date: string; status: 'taken' | 'missed' }[];
+}
+
 export default function Dashboard() {
-  const { 
-    userProfile, 
-    logs, 
-    logDose, 
-    remindMeLater, 
-    remindMeCount, 
-    deviceConnected, 
-    toggleDeviceConnection 
+  const {
+    userProfile,
+    logs,
+    logDose,
+    remindMeLater,
+    remindMeCount,
+    deviceConnected,
+    toggleDeviceConnection
   } = useAppStore();
 
   const [isConnecting, setIsConnecting] = useState(false);
+  const [trendPercentage, setTrendPercentage] = useState(0);
+  const [insight, setInsight] = useState<InsightResponse | null>(null);
 
-  // Calculate 30-day trend
-  const last30DaysLogs = logs.filter(log => log.timestamp >= subDays(new Date(), 30));
-  const takenCount = last30DaysLogs.filter(log => log.status === 'taken').length;
-  const trendPercentage = last30DaysLogs.length > 0 
-    ? Math.round((takenCount / last30DaysLogs.length) * 100) 
-    : 0;
+  // Server-side trend (refreshes whenever logs change)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const t = await apiFetch<TrendResponse>('/stats/trend?days=30');
+        if (!cancelled) setTrendPercentage(t.trendPercentage);
+      } catch {
+        if (!cancelled) setTrendPercentage(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [logs.length]);
+
+  // AI pattern insight
+  useEffect(() => {
+    if (!userProfile?.features.aiInsights) {
+      setInsight(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const i = await apiFetch<InsightResponse>('/insights/pattern');
+        if (!cancelled) setInsight(i);
+      } catch {
+        if (!cancelled) setInsight(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [logs.length, userProfile?.features.aiInsights]);
 
   // Check if today's dose is taken
   const todayLog = logs.find(log => isSameDay(log.timestamp, new Date()));
@@ -140,7 +181,7 @@ export default function Dashboard() {
       </div>
 
       {/* AI Insight (The Aha Moment) */}
-      {userProfile?.features.aiInsights && logs.length >= 7 && (
+      {userProfile?.features.aiInsights && insight?.detected && (
         <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-3xl p-6 relative overflow-hidden group">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500 opacity-50" />
           <div className="flex items-start gap-4">
@@ -155,24 +196,23 @@ export default function Dashboard() {
                 </span>
               </h3>
               <p className="text-slate-300 leading-relaxed mb-4">
-                You tend to skip your evening dose on Wednesdays and Thursdays — based on recent logs, this has happened 6 of the last 8 occurrences and correlates with lower physical wellness scores the following morning.
+                {insight.message}
               </p>
-              
-              {/* Inline Evidence */}
-              <div className="bg-black/30 rounded-xl p-4 border border-white/5">
-                <p className="text-xs text-slate-400 mb-3 uppercase tracking-wider font-semibold">Evidence: Last 4 Weeks (Wed/Thu)</p>
-                <div className="flex gap-2">
-                  {[...Array(8)].map((_, i) => (
-                    <div 
-                      key={i} 
-                      className={`h-8 flex-1 rounded-md ${
-                        i < 2 ? 'bg-teal-500/80' : 'bg-rose-500/80'
-                      }`}
-                      title={i < 2 ? 'Taken' : 'Missed'}
-                    />
-                  ))}
+
+              {insight.evidence.length > 0 && (
+                <div className="bg-black/30 rounded-xl p-4 border border-white/5">
+                  <p className="text-xs text-slate-400 mb-3 uppercase tracking-wider font-semibold">Evidence: Recent Wed/Thu</p>
+                  <div className="flex gap-2">
+                    {insight.evidence.map((e, i) => (
+                      <div
+                        key={`${e.date}-${i}`}
+                        className={`h-8 flex-1 rounded-md ${e.status === 'taken' ? 'bg-teal-500/80' : 'bg-rose-500/80'}`}
+                        title={`${e.date}: ${e.status}`}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
