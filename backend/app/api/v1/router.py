@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.routes import auth, health, insights, logs, profile, reminders, stats
+from app.api.v1.routes import auth, caregiver, device, health, insights, logs, profile, reminders, stats
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router, tags=["health"])
@@ -10,3 +10,5 @@ api_router.include_router(logs.router)
 api_router.include_router(reminders.router)
 api_router.include_router(stats.router)
 api_router.include_router(insights.router)
+api_router.include_router(caregiver.router)
+api_router.include_router(device.router)

@@ -59,7 +59,7 @@ interface AppState {
   remindMeLater: () => Promise<void>;
   refreshLogs: () => Promise<void>;
   submitCheckIn: (logId: string, checkIn: CheckIn) => Promise<void>;
-  toggleDeviceConnection: () => void;
+  toggleDeviceConnection: () => Promise<void>;
   skipCheckIn: () => void;
   resetApp: () => void;
 }
@@ -264,8 +264,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setPendingLogId(null);
   };
 
-  const toggleDeviceConnection = () => {
-    setDeviceConnected(prev => !prev);
+  const toggleDeviceConnection = async () => {
+    const res = await apiFetch<{ deviceConnected: boolean }>('/device/toggle', { method: 'POST' });
+    setDeviceConnected(res.deviceConnected);
   };
 
   const resetApp = () => {
