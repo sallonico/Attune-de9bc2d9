@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.core.deps import get_current_user, get_database
 from app.core.security import create_access_token, hash_password, verify_password
+from app.services.scheduling import ensure_routine, ensure_schedule
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -31,6 +32,8 @@ def _public_profile(profile: dict | None) -> dict | None:
         "features": profile.get("features", {}),
         "deviceConnected": profile.get("deviceConnected", False),
         "remindMeCount": profile.get("remindMeCount", 0),
+        "schedule": ensure_schedule(profile),
+        "routine": ensure_routine(profile),
     }
 
 

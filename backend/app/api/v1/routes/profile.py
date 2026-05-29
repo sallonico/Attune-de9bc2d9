@@ -5,6 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.deps import get_current_user, get_database
+from app.services.scheduling import ensure_routine, ensure_schedule
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -59,6 +60,8 @@ def _serialize(profile: dict) -> dict:
         "features": profile.get("features", {}),
         "deviceConnected": profile.get("deviceConnected", False),
         "remindMeCount": profile.get("remindMeCount", 0),
+        "schedule": ensure_schedule(profile),
+        "routine": ensure_routine(profile),
     }
 
 

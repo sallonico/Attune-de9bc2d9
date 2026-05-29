@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useCa
 import { apiFetch, getToken, setToken } from './api';
 
 export type LogStatus = 'taken' | 'missed';
+export type TimeWindow = 'morning' | 'afternoon' | 'evening' | 'night';
 
 export interface CheckIn {
   physical: number; // 1-5 scale
@@ -18,6 +19,67 @@ export interface Log {
   checkIn?: CheckIn;
 }
 
+export interface DateOverride {
+  id: string;
+  start: string;            // YYYY-MM-DD
+  end: string;              // YYYY-MM-DD
+  type: 'shift' | 'set' | 'pause';
+  shiftMinutes?: number;
+  time?: string;            // HH:mm (type 'set')
+  note?: string | null;
+}
+
+export interface Schedule {
+  time: string;             // HH:mm — default daily dose time
+  daysOfWeek: number[];     // Mon=0 .. Sun=6
+  window: TimeWindow | null;
+  reason: string | null;
+  source: 'ai' | 'user';
+  rxcui: string | null;
+  dayOverrides: Record<string, string>;   // { "5": "10:00" }
+  dateOverrides: DateOverride[];
+}
+
+export interface Routine {
+  wakeTime: string;
+  sleepTime: string;
+  withFood: boolean;
+  mealTimes: Record<string, string>;       // { breakfast, lunch, dinner }
+  variableDays: number[];
+}
+
+export interface UpcomingDose {
+  date: string;             // YYYY-MM-DD
+  time: string | null;      // null = no dose / skipped
+  skipped: boolean;
+}
+
+export interface Conflict {
+  type: string;
+  message: string;
+}
+
+export interface ScheduleView {
+  schedule: Schedule;
+  routine: Routine;
+  nextDue: string | null;   // ISO datetime
+  upcoming: UpcomingDose[];
+  conflicts: Conflict[];
+}
+
+export interface Suggestion {
+  window: TimeWindow;
+  reason: string | null;
+  confidence: string;
+  withFood: boolean | null;
+  rxcui: string | null;
+  tier: 'grounded' | 'unverified' | 'manual';
+  grounded: boolean;
+  unverified: boolean;
+  needsManual: boolean;
+  time: string;             // window resolved against routine
+}
+
 export interface UserProfile {
   name: string;
   medication: string;
@@ -29,10 +91,26 @@ export interface UserProfile {
   };
 }
 
+// Everything completeOnboarding needs to persist in one go.
+export interface OnboardingData {
+  profile: UserProfile;
+  schedule: {
+    time: string;
+    daysOfWeek: number[];
+    window: TimeWindow | null;
+    reason: string | null;
+    source: 'ai' | 'user';
+    rxcui: string | null;
+  };
+  routine: Routine;
+}
+
 interface MeResponse {
   user_id: string;
   email: string;
-  profile: (UserProfile & { deviceConnected?: boolean; remindMeCount?: number }) | null;
+  profile:
+    | (UserProfile & { deviceConnected?: boolean; remindMeCount?: number; schedule?: Schedule; routine?: Routine })
+    | null;
 }
 
 interface AppState {
@@ -41,6 +119,7 @@ interface AppState {
   email: string | null;
   isOnboarded: boolean;
   userProfile: UserProfile | null;
+  scheduleView: ScheduleView | null;
   logs: Log[];
   remindMeCount: number;
   deviceConnected: boolean;
@@ -53,7 +132,7 @@ interface AppState {
   logout: () => Promise<void>;
 
   // App actions
-  completeOnboarding: (profile: UserProfile) => Promise<void>;
+  completeOnboarding: (data: OnboardingData) => Promise<void>;
   updateProfile: (patch: Partial<UserProfile>) => Promise<void>;
   logDose: (status: LogStatus) => Promise<void>;
   remindMeLater: () => Promise<void>;
@@ -62,6 +141,16 @@ interface AppState {
   toggleDeviceConnection: () => Promise<void>;
   skipCheckIn: () => void;
   resetApp: () => void;
+
+  // Scheduling actions
+  fetchSuggestion: (medication: string, withFood?: boolean) => Promise<Suggestion>;
+  refreshSchedule: () => Promise<void>;
+  saveSchedule: (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => Promise<void>;
+  saveRoutine: (routine: Routine) => Promise<void>;
+  addDayOverride: (weekday: number, time: string) => Promise<void>;
+  removeDayOverride: (weekday: number) => Promise<void>;
+  addDateOverride: (body: Omit<DateOverride, 'id'>) => Promise<void>;
+  removeDateOverride: (id: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -80,6 +169,15 @@ const fromApiLog = (l: ApiLog): Log => ({
   checkIn: l.checkIn,
 });
 
+const profileFromApi = (
+  p: UserProfile & { deviceConnected?: boolean; remindMeCount?: number }
+): UserProfile => ({
+  name: p.name,
+  medication: p.medication,
+  scheduleTime: p.scheduleTime,
+  features: p.features,
+});
+
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -87,6 +185,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const [isOnboarded, setIsOnboarded] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [scheduleView, setScheduleView] = useState<ScheduleView | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
   const [remindMeCount, setRemindMeCount] = useState(0);
   const [deviceConnected, setDeviceConnected] = useState(false);
@@ -102,26 +201,31 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
+  const refreshSchedule = useCallback(async () => {
+    try {
+      const view = await apiFetch<ScheduleView>('/schedule');
+      setScheduleView(view);
+    } catch {
+      // ignore — schedule view is best-effort
+    }
+  }, []);
+
   const hydrateFromMe = useCallback(async (me: MeResponse) => {
     setIsAuthenticated(true);
     setEmail(me.email);
     if (me.profile) {
-      setUserProfile({
-        name: me.profile.name,
-        medication: me.profile.medication,
-        scheduleTime: me.profile.scheduleTime,
-        features: me.profile.features,
-      });
+      setUserProfile(profileFromApi(me.profile));
       setIsOnboarded(true);
       if (typeof me.profile.deviceConnected === 'boolean') setDeviceConnected(me.profile.deviceConnected);
       if (typeof me.profile.remindMeCount === 'number') setRemindMeCount(me.profile.remindMeCount);
-      await refreshLogs();
+      await Promise.all([refreshLogs(), refreshSchedule()]);
     } else {
       setUserProfile(null);
+      setScheduleView(null);
       setIsOnboarded(false);
       setLogs([]);
     }
-  }, [refreshLogs]);
+  }, [refreshLogs, refreshSchedule]);
 
   // Bootstrap: if we have a token, hydrate via /auth/me
   useEffect(() => {
@@ -179,44 +283,38 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setEmail(null);
     setIsOnboarded(false);
     setUserProfile(null);
+    setScheduleView(null);
     setLogs([]);
     setRemindMeCount(0);
     setDeviceConnected(false);
   };
 
-  const completeOnboarding = async (profile: UserProfile) => {
+  const completeOnboarding = async (data: OnboardingData) => {
+    // 1. Create the profile (existing shape — unchanged contract).
     const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
       '/profile',
-      {
-        method: 'POST',
-        body: JSON.stringify(profile),
-      }
+      { method: 'POST', body: JSON.stringify(data.profile) }
     );
-    setUserProfile({
-      name: res.name,
-      medication: res.medication,
-      scheduleTime: res.scheduleTime,
-      features: res.features,
-    });
+    setUserProfile(profileFromApi(res));
     if (typeof res.deviceConnected === 'boolean') setDeviceConnected(res.deviceConnected);
     if (typeof res.remindMeCount === 'number') setRemindMeCount(res.remindMeCount);
+
+    // 2. Persist the schedule, then 3. the routine (recomputes AI-sourced time).
+    await apiFetch<ScheduleView>('/schedule', { method: 'PUT', body: JSON.stringify(data.schedule) });
+    const view = await apiFetch<ScheduleView>('/schedule/routine', {
+      method: 'PUT',
+      body: JSON.stringify(data.routine),
+    });
+    setScheduleView(view);
     setIsOnboarded(true);
   };
 
   const updateProfile = async (patch: Partial<UserProfile>) => {
     const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
       '/profile',
-      {
-        method: 'PATCH',
-        body: JSON.stringify(patch),
-      }
+      { method: 'PATCH', body: JSON.stringify(patch) }
     );
-    setUserProfile({
-      name: res.name,
-      medication: res.medication,
-      scheduleTime: res.scheduleTime,
-      features: res.features,
-    });
+    setUserProfile(profileFromApi(res));
   };
 
   const logDose = async (status: LogStatus) => {
@@ -269,6 +367,52 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setDeviceConnected(res.deviceConnected);
   };
 
+  // ---- Scheduling actions ------------------------------------------------ //
+  const fetchSuggestion = async (medication: string, withFood?: boolean) =>
+    apiFetch<Suggestion>('/schedule/suggest', {
+      method: 'POST',
+      body: JSON.stringify({ medication, withFood: withFood ?? null }),
+    });
+
+  const saveSchedule = async (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => {
+    const view = await apiFetch<ScheduleView>('/schedule', { method: 'PUT', body: JSON.stringify(body) });
+    setScheduleView(view);
+  };
+
+  const saveRoutine = async (routine: Routine) => {
+    const view = await apiFetch<ScheduleView>('/schedule/routine', {
+      method: 'PUT',
+      body: JSON.stringify(routine),
+    });
+    setScheduleView(view);
+  };
+
+  const addDayOverride = async (weekday: number, time: string) => {
+    const view = await apiFetch<ScheduleView>('/schedule/day-override', {
+      method: 'POST',
+      body: JSON.stringify({ weekday, time }),
+    });
+    setScheduleView(view);
+  };
+
+  const removeDayOverride = async (weekday: number) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/day-override/${weekday}`, { method: 'DELETE' });
+    setScheduleView(view);
+  };
+
+  const addDateOverride = async (body: Omit<DateOverride, 'id'>) => {
+    const view = await apiFetch<ScheduleView>('/schedule/date-override', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    setScheduleView(view);
+  };
+
+  const removeDateOverride = async (id: string) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/date-override/${id}`, { method: 'DELETE' });
+    setScheduleView(view);
+  };
+
   const resetApp = () => {
     // Reset is now an alias for logout — keeps the nav button behavior intact
     void logout();
@@ -281,6 +425,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       email,
       isOnboarded,
       userProfile,
+      scheduleView,
       logs,
       remindMeCount,
       deviceConnected,
@@ -297,7 +442,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       submitCheckIn,
       toggleDeviceConnection,
       skipCheckIn,
-      resetApp
+      resetApp,
+      fetchSuggestion,
+      refreshSchedule,
+      saveSchedule,
+      saveRoutine,
+      addDayOverride,
+      removeDayOverride,
+      addDateOverride,
+      removeDateOverride,
     }}>
       {children}
     </AppContext.Provider>

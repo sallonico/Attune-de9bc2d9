@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../lib/store';
 import { apiFetch } from '../lib/api';
 import { format, subDays, isSameDay } from 'date-fns';
-import { Brain, CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertCircle, ChevronRight } from 'lucide-react';
+import { Brain, CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
 
 interface TrendResponse {
   days: number;
@@ -22,6 +22,7 @@ interface InsightResponse {
 export default function Dashboard() {
   const {
     userProfile,
+    scheduleView,
     logs,
     logDose,
     remindMeLater,
@@ -31,6 +32,20 @@ export default function Dashboard() {
   } = useAppStore();
 
   const [isConnecting, setIsConnecting] = useState(false);
+
+  // Friendly "next dose" from the resolved schedule, falling back to the
+  // legacy flat time if the schedule view hasn't loaded yet.
+  const nextDoseLabel = (() => {
+    if (scheduleView?.nextDue) {
+      const d = new Date(scheduleView.nextDue);
+      const today = isSameDay(d, new Date());
+      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return today ? t : `${format(d, 'EEE')} ${t}`;
+    }
+    return userProfile?.scheduleTime ?? '—';
+  })();
+  const conflicts = scheduleView?.conflicts ?? [];
+  const scheduleReason = scheduleView?.schedule.reason;
   const [trendPercentage, setTrendPercentage] = useState(0);
   const [insight, setInsight] = useState<InsightResponse | null>(null);
 
@@ -90,7 +105,7 @@ export default function Dashboard() {
             Hello, {userProfile?.name} 👋
           </h1>
           <p className="text-slate-400 mt-1">
-            Your {userProfile?.medication} is scheduled for {userProfile?.scheduleTime}
+            Your {userProfile?.medication} — next dose {nextDoseLabel}
           </p>
         </div>
 
@@ -114,6 +129,18 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* Schedule conflict warnings */}
+      {conflicts.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-2">
+          {conflicts.map((c, i) => (
+            <div key={i} className="flex items-start gap-3 text-sm text-amber-200">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{c.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Primary Action Card */}
       <div className="relative overflow-hidden bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
         <div className="absolute top-0 right-0 w-64 h-64 bg-teal-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/2" />
@@ -122,8 +149,11 @@ export default function Dashboard() {
           <div className="flex-1 text-center md:text-left">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-sm text-slate-300 mb-4">
               <Clock className="w-4 h-4 text-teal-400" />
-              Next dose: {userProfile?.scheduleTime}
+              Next dose: {nextDoseLabel}
             </div>
+            {scheduleReason && (
+              <p className="text-xs text-slate-500 mb-4 max-w-md mx-auto md:mx-0">{scheduleReason}</p>
+            )}
             
             {isTakenToday ? (
               <div>

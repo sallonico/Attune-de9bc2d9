@@ -5,13 +5,14 @@ import { AppProvider, useAppStore } from '@/lib/store';
 import Onboarding from '@/components/onboarding';
 import Dashboard from '@/components/dashboard';
 import CaregiverView from '@/components/caregiverview';
+import ScheduleSettings from '@/components/schedulesettings';
 import WellnessModal from '@/components/wellnessmodal';
 import AuthGate from '@/components/authgate';
-import { Activity, Users, Settings, LogOut } from 'lucide-react';
+import { Activity, Users, CalendarClock, LogOut } from 'lucide-react';
 
 function MainApp() {
   const { isAuthenticated, authLoading, isOnboarded, userProfile, resetApp } = useAppStore();
-  const [activeTab, setActiveTab] = useState<'patient' | 'caregiver'>('patient');
+  const [activeTab, setActiveTab] = useState<'patient' | 'schedule' | 'caregiver'>('patient');
 
   if (authLoading) {
     return (
@@ -61,6 +62,17 @@ function MainApp() {
               >
                 My Dashboard
               </button>
+              <button
+                onClick={() => setActiveTab('schedule')}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
+                  activeTab === 'schedule'
+                    ? 'bg-white/10 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <CalendarClock className="w-4 h-4" />
+                <span className="hidden md:inline">Schedule</span>
+              </button>
               {userProfile?.features.caregiverAccess && (
                 <button
                   onClick={() => setActiveTab('caregiver')}
@@ -89,7 +101,9 @@ function MainApp() {
 
       {/* Main Content Area */}
       <main className="relative z-10 max-w-6xl mx-auto px-6 py-8 md:py-12">
-        {activeTab === 'patient' ? <Dashboard /> : <CaregiverView />}
+        {activeTab === 'patient' && <Dashboard />}
+        {activeTab === 'schedule' && <ScheduleSettings />}
+        {activeTab === 'caregiver' && <CaregiverView />}
       </main>
 
       <WellnessModal />
