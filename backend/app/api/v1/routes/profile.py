@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.deps import get_current_user, get_database
-from app.services.scheduling import ensure_routine, ensure_schedule
+from app.services.scheduling import DEFAULT_TZ, ensure_routine, ensure_schedule
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -22,6 +23,16 @@ def _validate_hhmm(v: str) -> str:
     return v
 
 
+def _validate_tz(v: str) -> str:
+    """Accept only a real IANA zone (e.g. ``America/New_York``) so we never store
+    junk that would silently fall back to UTC at display time."""
+    try:
+        ZoneInfo(v)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError("timezone must be a valid IANA name (e.g. America/New_York)")
+    return v
+
+
 class Features(BaseModel):
     aiInsights: bool = True
     wellnessCheckIns: bool = True
@@ -32,6 +43,7 @@ class ProfileBody(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     medication: str = Field(min_length=1, max_length=120)
     scheduleTime: str
+    timezone: str = DEFAULT_TZ
     features: Features = Field(default_factory=Features)
 
     @field_validator("scheduleTime")
@@ -39,11 +51,17 @@ class ProfileBody(BaseModel):
     def _valid(cls, v: str) -> str:
         return _validate_hhmm(v)
 
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v: str) -> str:
+        return _validate_tz(v)
+
 
 class ProfilePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
     medication: str | None = Field(default=None, min_length=1, max_length=120)
     scheduleTime: str | None = None
+    timezone: str | None = None
     features: Features | None = None
 
     @field_validator("scheduleTime")
@@ -51,12 +69,18 @@ class ProfilePatch(BaseModel):
     def _valid(cls, v: str | None) -> str | None:
         return _validate_hhmm(v) if v is not None else v
 
+    @field_validator("timezone")
+    @classmethod
+    def _tz(cls, v: str | None) -> str | None:
+        return _validate_tz(v) if v is not None else v
+
 
 def _serialize(profile: dict) -> dict:
     return {
         "name": profile["name"],
         "medication": profile["medication"],
         "scheduleTime": profile["scheduleTime"],
+        "timezone": profile.get("timezone", DEFAULT_TZ),
         "features": profile.get("features", {}),
         "deviceConnected": profile.get("deviceConnected", False),
         "remindMeCount": profile.get("remindMeCount", 0),
@@ -79,6 +103,7 @@ async def upsert_profile(
                 "name": body.name,
                 "medication": body.medication,
                 "scheduleTime": body.scheduleTime,
+                "timezone": body.timezone,
                 "features": body.features.model_dump(),
                 "updated_at": now,
             },
@@ -122,6 +147,8 @@ async def patch_profile(
         update["medication"] = body.medication
     if body.scheduleTime is not None:
         update["scheduleTime"] = body.scheduleTime
+    if body.timezone is not None:
+        update["timezone"] = body.timezone
     if body.features is not None:
         update["features"] = body.features.model_dump()
     if update:

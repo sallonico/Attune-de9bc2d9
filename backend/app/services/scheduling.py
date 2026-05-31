@@ -12,9 +12,11 @@ for the lazy migration of legacy profiles that only have a flat ``scheduleTime``
 from __future__ import annotations
 
 from datetime import date as date_cls
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 WINDOWS = ("morning", "afternoon", "evening", "night")
+DEFAULT_TZ = "UTC"
 ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 NEAR_MEAL_MINUTES = 45
 NEXT_DUE_HORIZON_DAYS = 15
@@ -202,27 +204,45 @@ def _as_utc(now: datetime) -> datetime:
     return now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
 
 
-def next_due(schedule: dict, routine: dict, now: datetime) -> datetime | None:
+def resolve_tz(name: str | None) -> tzinfo:
+    """Return a tzinfo for an IANA name (e.g. ``America/New_York``), falling back
+    to UTC for a missing or unknown name so display never crashes on bad data."""
+    if not name:
+        return timezone.utc
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return timezone.utc
+
+
+def next_due(
+    schedule: dict, routine: dict, now: datetime, tz: tzinfo = timezone.utc
+) -> datetime | None:
     """First dose datetime at or after ``now``, scanning forward up to ~2 weeks.
 
-    HH:mm times are treated as wall-clock in UTC for display purposes; per-user
-    timezones are a follow-up (no tz is stored on the profile today)."""
+    HH:mm times are wall-clock in the user's timezone ``tz``: each candidate is
+    built in ``tz`` so the returned datetime carries the correct offset, and the
+    day scan starts from "today" as seen in ``tz`` (so a dose near midnight lands
+    on the right calendar day). Defaults to UTC for callers without a tz."""
     now = _as_utc(now)
+    now_local = now.astimezone(tz)
     for offset in range(NEXT_DUE_HORIZON_DAYS):
-        d = (now + timedelta(days=offset)).date()
+        d = (now_local + timedelta(days=offset)).date()
         t = resolve_for_date(schedule, routine, d)
         if t is None:
             continue
         h, m = _parse_hhmm(t)
-        cand = datetime(d.year, d.month, d.day, h, m, tzinfo=timezone.utc)
+        cand = datetime(d.year, d.month, d.day, h, m, tzinfo=tz)
         if cand >= now:
             return cand
     return None
 
 
-def upcoming(schedule: dict, routine: dict, now: datetime, days: int = 7) -> list[dict]:
+def upcoming(
+    schedule: dict, routine: dict, now: datetime, days: int = 7, tz: tzinfo = timezone.utc
+) -> list[dict]:
     now = _as_utc(now)
-    start = now.date()
+    start = now.astimezone(tz).date()
     out = []
     for offset in range(days):
         d = start + timedelta(days=offset)
@@ -293,11 +313,14 @@ def detect_conflicts(schedule: dict, routine: dict) -> list[dict]:
 def schedule_view(profile: dict | None, now: datetime) -> dict:
     sched = ensure_schedule(profile)
     routine = ensure_routine(profile)
-    nd = next_due(sched, routine, now)
+    tz_name = (profile or {}).get("timezone") or DEFAULT_TZ
+    tz = resolve_tz(tz_name)
+    nd = next_due(sched, routine, now, tz)
     return {
         "schedule": sched,
         "routine": routine,
+        "timezone": tz_name,
         "nextDue": nd.isoformat() if nd else None,
-        "upcoming": upcoming(sched, routine, now, 7),
+        "upcoming": upcoming(sched, routine, now, 7, tz),
         "conflicts": detect_conflicts(sched, routine),
     }

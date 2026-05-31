@@ -6,6 +6,15 @@ import { apiFetch, getToken, setToken } from './api';
 export type LogStatus = 'taken' | 'missed';
 export type TimeWindow = 'morning' | 'afternoon' | 'evening' | 'night';
 
+/** The device's IANA timezone (e.g. "America/New_York"), or "UTC" if unavailable. */
+export function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
 export interface CheckIn {
   physical: number; // 1-5 scale
   emotional: number; // 1-5 scale
@@ -62,7 +71,8 @@ export interface Conflict {
 export interface ScheduleView {
   schedule: Schedule;
   routine: Routine;
-  nextDue: string | null;   // ISO datetime
+  timezone: string;         // IANA name (e.g. "America/New_York") doses are anchored to
+  nextDue: string | null;   // ISO datetime (carries the user's tz offset)
   upcoming: UpcomingDose[];
   conflicts: Conflict[];
 }
@@ -84,6 +94,7 @@ export interface UserProfile {
   name: string;
   medication: string;
   scheduleTime: string; // HH:mm
+  timezone: string;     // IANA name, e.g. "America/New_York"
   features: {
     aiInsights: boolean;
     wellnessCheckIns: boolean;
@@ -175,6 +186,8 @@ const profileFromApi = (
   name: p.name,
   medication: p.medication,
   scheduleTime: p.scheduleTime,
+  // Older profiles created before tz support fall back to the device zone.
+  timezone: p.timezone || browserTimeZone(),
   features: p.features,
 });
 

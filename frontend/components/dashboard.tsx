@@ -1,10 +1,36 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { useAppStore } from '../lib/store';
+import { useAppStore, browserTimeZone } from '../lib/store';
 import { apiFetch } from '../lib/api';
 import { format, subDays, isSameDay } from 'date-fns';
 import { Brain, CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
+
+/** True when two instants fall on the same calendar day in the given timezone. */
+function sameDayInTz(a: Date, b: Date, tz: string): boolean {
+  const key = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+  return key(a) === key(b);
+}
+
+/** A ticking "current date & time" in the patient's timezone. */
+function LiveClock({ tz }: { tz: string }) {
+  const [now, setNow] = useState<Date | null>(null); // null until mounted (avoids SSR/client mismatch)
+  useEffect(() => {
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (!now) return null;
+  const date = now.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', timeZone: tz });
+  const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit', timeZone: tz });
+  return (
+    <div className="flex items-center gap-2 text-sm text-slate-400" title={`Times shown in ${tz.replace(/_/g, ' ')}`}>
+      <Clock className="w-4 h-4 text-teal-400" />
+      <span className="text-slate-300">{date}</span>
+      <span className="text-white font-medium tabular-nums">{time}</span>
+    </div>
+  );
+}
 
 interface TrendResponse {
   days: number;
@@ -33,14 +59,20 @@ export default function Dashboard() {
 
   const [isConnecting, setIsConnecting] = useState(false);
 
+  // All dose times are anchored to the patient's timezone (set at onboarding,
+  // editable in Schedule settings). We format every label in that zone so the
+  // displayed time matches when they actually take the medication — regardless
+  // of the device's own clock.
+  const tz = scheduleView?.timezone || browserTimeZone();
+
   // Friendly "next dose" from the resolved schedule, falling back to the
   // legacy flat time if the schedule view hasn't loaded yet.
   const nextDoseLabel = (() => {
     if (scheduleView?.nextDue) {
       const d = new Date(scheduleView.nextDue);
-      const today = isSameDay(d, new Date());
-      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      return today ? t : `${format(d, 'EEE')} ${t}`;
+      const today = sameDayInTz(d, new Date(), tz);
+      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz });
+      return today ? t : `${d.toLocaleDateString([], { weekday: 'short', timeZone: tz })} ${t}`;
     }
     return userProfile?.scheduleTime ?? '—';
   })();
@@ -81,8 +113,8 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, [logs.length, userProfile?.features.aiInsights]);
 
-  // Check if today's dose is taken
-  const todayLog = logs.find(log => isSameDay(log.timestamp, new Date()));
+  // Check if today's dose is taken — "today" as seen in the patient's timezone.
+  const todayLog = logs.find(log => sameDayInTz(log.timestamp, new Date(), tz));
   const isTakenToday = todayLog?.status === 'taken';
   const isMissedToday = todayLog?.status === 'missed';
 
@@ -107,6 +139,9 @@ export default function Dashboard() {
           <p className="text-slate-400 mt-1">
             Your {userProfile?.medication} — next dose {nextDoseLabel}
           </p>
+          <div className="mt-2">
+            <LiveClock tz={tz} />
+          </div>
         </div>
 
         <button 
@@ -278,8 +313,8 @@ export default function Dashboard() {
           </div>
           
           <div className="grid grid-cols-7 gap-2">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
-              <div key={day} className="text-center text-xs text-slate-500 font-medium mb-2">{day}</div>
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
+              <div key={i} className="text-center text-xs text-slate-500 font-medium mb-2">{day}</div>
             ))}
             
             {/* Generate 28 days of heatmap blocks */}

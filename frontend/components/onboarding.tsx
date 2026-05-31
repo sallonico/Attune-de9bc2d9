@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useAppStore, TimeWindow, Suggestion, Routine } from '../lib/store';
+import { useAppStore, TimeWindow, Suggestion, Routine, browserTimeZone } from '../lib/store';
 import {
   ArrowRight, Check, Pill, Brain, HeartPulse, Users, Sparkles, LogOut,
   Sun, Sunrise, Sunset, Moon, Clock, Utensils, AlertTriangle, ShieldCheck,
@@ -94,7 +94,9 @@ export default function Onboarding() {
     setSubmitting(true);
     try {
       await completeOnboarding({
-        profile: { name, medication, scheduleTime, features },
+        // Anchor dose times to the patient's device timezone so the dashboard
+        // shows the time they actually take it (editable later in Schedule).
+        profile: { name, medication, scheduleTime, timezone: browserTimeZone(), features },
         schedule: { time: scheduleTime, daysOfWeek, window, reason: suggestion?.reason ?? null, source, rxcui: suggestion?.rxcui ?? null },
         routine,
       });

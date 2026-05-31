@@ -1,11 +1,20 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useAppStore, TimeWindow } from '../lib/store';
+import { useAppStore, TimeWindow, browserTimeZone } from '../lib/store';
 import {
   Clock, CalendarDays, AlertTriangle, Plus, Trash2, Utensils, Sun,
-  Sunrise, Sunset, Moon, CalendarOff, Pause, ArrowRightLeft, Check,
+  Sunrise, Sunset, Moon, CalendarOff, Pause, ArrowRightLeft, Check, Globe,
 } from 'lucide-react';
+
+// A short, friendly list; the user's current and device zones are always added.
+const COMMON_TIMEZONES = [
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Phoenix',
+  'America/Los_Angeles', 'America/Anchorage', 'Pacific/Honolulu',
+  'America/Toronto', 'America/Sao_Paulo', 'Europe/London', 'Europe/Paris',
+  'Europe/Berlin', 'Europe/Athens', 'Asia/Kolkata', 'Asia/Dubai',
+  'Asia/Shanghai', 'Asia/Tokyo', 'Australia/Sydney', 'UTC',
+];
 
 const DAY_FULL = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // index 0=Mon..6=Sun
 const WINDOW_ICON: Record<TimeWindow, React.ReactNode> = {
@@ -30,10 +39,17 @@ const btnGhost = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-s
 
 export default function ScheduleSettings() {
   const {
-    userProfile, scheduleView, refreshSchedule,
+    userProfile, scheduleView, refreshSchedule, updateProfile,
     saveSchedule, saveRoutine,
     addDayOverride, removeDayOverride, addDateOverride, removeDateOverride,
   } = useAppStore();
+
+  // Changing the timezone re-anchors every dose time, so refresh the resolved
+  // view (nextDue/upcoming) after the profile patch lands.
+  const saveTimezone = async (timezone: string) => {
+    await updateProfile({ timezone });
+    await refreshSchedule();
+  };
 
   useEffect(() => { if (!scheduleView) void refreshSchedule(); }, [scheduleView, refreshSchedule]);
 
@@ -46,14 +62,14 @@ export default function ScheduleSettings() {
     );
   }
 
-  const { schedule, routine, nextDue, upcoming, conflicts } = scheduleView;
+  const { schedule, routine, timezone, nextDue, upcoming, conflicts } = scheduleView;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-3xl font-bold text-white tracking-tight">Schedule</h1>
         <p className="text-slate-400 mt-1">
-          {userProfile?.medication} · next dose {nextDue ? new Date(nextDue).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '—'}
+          {userProfile?.medication} · next dose {nextDue ? new Date(nextDue).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: timezone }) : '—'}
         </p>
       </div>
 
@@ -68,11 +84,79 @@ export default function ScheduleSettings() {
         </div>
       )}
 
+      <TimezoneCard timezone={timezone} onSave={saveTimezone} />
       <DefaultScheduleCard schedule={schedule} onSave={saveSchedule} />
       <DayOverridesCard schedule={schedule} onAdd={addDayOverride} onRemove={removeDayOverride} />
       <DateOverridesCard onAdd={addDateOverride} onRemove={removeDateOverride} overrides={schedule.dateOverrides} />
       <RoutineCard routine={routine} onSave={saveRoutine} />
       <UpcomingCard upcoming={upcoming} />
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+function TimezoneCard({ timezone, onSave }: { timezone: string; onSave: (tz: string) => Promise<void> }) {
+  const device = browserTimeZone();
+  const [tz, setTz] = useState(timezone);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setTz(timezone); }, [timezone]);
+
+  // Always offer the saved zone and this device's zone, even if uncommon.
+  const options = useMemo(
+    () => Array.from(new Set([timezone, device, ...COMMON_TIMEZONES])),
+    [timezone, device],
+  );
+  const dirty = tz !== timezone;
+
+  // Live preview of "now" in the selected zone so the choice is concrete.
+  const nowPreview = (() => {
+    try {
+      return new Date().toLocaleString([], {
+        weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: tz,
+      });
+    } catch { return '—'; }
+  })();
+
+  const save = async () => {
+    setSaving(true);
+    try { await onSave(tz); setSaved(true); setTimeout(() => setSaved(false), 1500); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className={card}>
+      <div className="flex items-center gap-2 mb-1">
+        <Globe className="w-5 h-5 text-sky-400" />
+        <h2 className="text-lg font-semibold text-white">Timezone</h2>
+      </div>
+      <p className="text-sm text-slate-400 mb-4">
+        Your dose times are shown in this timezone. Update it if you travel or set up reminders for someone in another zone.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Timezone</label>
+          <select value={tz} onChange={(e) => setTz(e.target.value)} className={inputCls}>
+            {options.map((z) => (
+              <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>
+            ))}
+          </select>
+        </div>
+        {tz !== device && (
+          <button onClick={() => setTz(device)} className={btnGhost}>
+            <Globe className="w-4 h-4" /> Use this device ({device.replace(/_/g, ' ')})
+          </button>
+        )}
+      </div>
+
+      <p className="text-xs text-slate-500 mt-3">Now in this zone: <span className="text-slate-300">{nowPreview}</span></p>
+
+      <div className="mt-4">
+        <button onClick={save} disabled={saving || !dirty} className={btnPrimary}>
+          {saved ? <><Check className="w-4 h-4" /> Saved</> : saving ? 'Saving…' : 'Save timezone'}
+        </button>
+      </div>
     </div>
   );
 }

@@ -11,6 +11,21 @@
 
 Our hardware attracts users. But long-term retention is driven entirely by the software experience — the features that reduce cognitive burden, build trust with caregivers, and create a habit loop around medication adherence.
 
+### What Problems Would This Solve?
+
+Medication non-adherence is one of the largest healthcare challenges globally.
+
+Common problems include:
+
+- Forgetting doses
+- Taking medications at inconsistent times
+- Missing medications when traveling
+- Difficulty coordinating multiple medications
+- Complex regimens involving food restrictions
+- Shift-work schedules
+- Elderly patients managing polypharmacy
+- Caregivers managing medications for others
+
 ### Who This Is For
 
 This product is built for anyone who takes something on a schedule — not just patients.
@@ -77,7 +92,14 @@ Each core feature addresses a fundamental human need, not just a convenience.
 
 ---
 
-### 3. AI Scheduling Assistant
+### 3. AI Scheduling Assistant - ChatBot that helps with scheduling (make this an optional choice that can be edited in settings)
+
+A timing recommendation API could help answer:
+
+"What's the best time for me to take this medication?"
+"How should I schedule these five medications?"
+"I work night shifts—how should my schedule adapt?"
+"I'm crossing time zones—when should I take my next dose?"
 
 **What it does:** Helps users figure out the best time(s) to take their medication through a guided, conversational prompt flow — rather than asking them to pick a time cold.
 
@@ -185,4 +207,18 @@ These are not nice-to-haves. They are the reason users stay past the first week 
 
 ---
 
-*This document is a living skeleton. Sections marked [TBD] require team input before they can be finalized.*
+## Terminal commands
+
+ATTUNE has two parts — a Python backend (FastAPI/uvicorn) and a Next.js frontend — and you need both running at the same time, in two separate terminal windows/tabs.
+
+### Backend (API)
+
+cd /Users/sallonigill/Attune-de9bc2d9/backend
+.venv/bin/python -m uvicorn app.main:app --port 8000
+This starts the API on http://localhost:8000. Running it from inside backend/ matters so it picks up .env (your Duke AI Gateway key).
+
+### Frontend (the app you actually use)
+
+cd /Users/sallonigill/Attune-de9bc2d9/frontend
+npm run dev
+Next.js will print a local URL — usually http://localhost:3000. Open that in your browser. That's "entering the software."

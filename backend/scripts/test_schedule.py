@@ -132,6 +132,32 @@ def test_next_due():
     check("skips to next active day (Mon)", nd3, datetime(2026, 6, 1, 8, 0, tzinfo=timezone.utc))
 
 
+def test_timezone():
+    print("next_due / schedule_view honor the user's timezone")
+    routine = s.default_routine()
+    sched = s.default_schedule(time="08:30")  # 8:30 AM daily
+
+    # Sunday 2026-05-31 06:00 UTC == 02:00 Sunday in New York (before the dose).
+    now = datetime(2026, 5, 31, 6, 0, tzinfo=timezone.utc)
+    ny = s.resolve_tz("America/New_York")
+    nd = s.next_due(sched, routine, now, ny)
+    # The dose is the SAME Sunday at 08:30 local, carrying the -04:00 offset...
+    check("dose is 08:30 wall-clock local", (nd.hour, nd.minute), (8, 30))
+    check("dose lands on Sunday the 31st", nd.date(), date(2026, 5, 31))
+    check("absolute instant is 12:30 UTC", nd.astimezone(timezone.utc).hour, 12)
+
+    # ...whereas the legacy UTC path treats 08:30 as UTC (the old, wrong display).
+    utc = s.next_due(sched, routine, now)
+    check("UTC default unchanged (back-compat)", utc.astimezone(timezone.utc).hour, 8)
+
+    view = s.schedule_view({"schedule": sched, "timezone": "America/New_York"}, now)
+    check("schedule_view echoes the timezone", view["timezone"], "America/New_York")
+    check("schedule_view nextDue carries offset", view["nextDue"], "2026-05-31T08:30:00-04:00")
+
+    bad = s.schedule_view({"schedule": sched, "timezone": "Not/AZone"}, now)
+    check("invalid tz falls back to UTC display", bad["nextDue"], "2026-05-31T08:30:00+00:00")
+
+
 def test_legacy_migration():
     print("ensure_schedule lazy migration")
     legacy = {"name": "x", "medication": "y", "scheduleTime": "09:15"}
@@ -177,6 +203,7 @@ def main():
         test_recompute_ai_time,
         test_conflicts,
         test_next_due,
+        test_timezone,
         test_legacy_migration,
         test_label_extraction,
     ):
