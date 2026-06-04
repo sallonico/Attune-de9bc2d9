@@ -6,8 +6,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.router import api_router
 from app.core.config import settings
+from app.core.db import ensure_indexes
 
 app = FastAPI(title="ATTUNE API", version="0.1.0")
+
+
+@app.on_event("startup")
+async def _ensure_indexes() -> None:
+    await ensure_indexes()
 
 app.add_middleware(
     CORSMiddleware,

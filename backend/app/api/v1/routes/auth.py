@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, status
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, EmailStr, Field
 
-from app.core.deps import get_current_user, get_database
+from app.core.deps import get_current_user, get_database, user_role
 from app.core.security import create_access_token, hash_password, verify_password
+from app.services.connections import generate_unique_code
 from app.services.scheduling import ensure_routine, ensure_schedule
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -15,6 +17,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 class SignupBody(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    role: Literal["patient", "caregiver"] = "patient"
 
 
 class LoginBody(BaseModel):
@@ -45,11 +48,20 @@ async def signup(body: SignupBody, db: AsyncIOMotorDatabase = Depends(get_databa
     user_doc = {
         "email": body.email.lower(),
         "password_hash": hash_password(body.password),
+        "role": body.role,
         "created_at": datetime.now(timezone.utc),
     }
+    # Patients get a connection code at sign-up so it's ready to share immediately.
+    if body.role == "patient":
+        user_doc["connection_code"] = await generate_unique_code(db)
     result = await db.users.insert_one(user_doc)
     user_id = str(result.inserted_id)
-    return {"user_id": user_id, "email": user_doc["email"], "access_token": create_access_token(user_id)}
+    return {
+        "user_id": user_id,
+        "email": user_doc["email"],
+        "role": body.role,
+        "access_token": create_access_token(user_id),
+    }
 
 
 @router.post("/login")
@@ -58,7 +70,12 @@ async def login(body: LoginBody, db: AsyncIOMotorDatabase = Depends(get_database
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_credentials")
     user_id = str(user["_id"])
-    return {"user_id": user_id, "email": user["email"], "access_token": create_access_token(user_id)}
+    return {
+        "user_id": user_id,
+        "email": user["email"],
+        "role": user_role(user),
+        "access_token": create_access_token(user_id),
+    }
 
 
 @router.post("/logout")
@@ -71,9 +88,19 @@ async def me(
     current_user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
-    profile = await db.profiles.find_one({"user_id": current_user["_id"]})
-    return {
+    role = user_role(current_user)
+    out: dict = {
         "user_id": str(current_user["_id"]),
         "email": current_user["email"],
-        "profile": _public_profile(profile),
+        "role": role,
     }
+    if role == "caregiver":
+        # Caregivers have no medication profile of their own; their home screen
+        # is the connect/patient-list flow handled by /connections.
+        out["profile"] = None
+        return out
+
+    profile = await db.profiles.find_one({"user_id": current_user["_id"]})
+    out["profile"] = _public_profile(profile)
+    out["connectionCode"] = current_user.get("connection_code")
+    return out

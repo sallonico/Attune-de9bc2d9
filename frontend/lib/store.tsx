@@ -5,6 +5,7 @@ import { apiFetch, getToken, setToken } from './api';
 
 export type LogStatus = 'taken' | 'missed';
 export type TimeWindow = 'morning' | 'afternoon' | 'evening' | 'night';
+export type UserRole = 'patient' | 'caregiver';
 
 /** The device's IANA timezone (e.g. "America/New_York"), or "UTC" if unavailable. */
 export function browserTimeZone(): string {
@@ -77,19 +78,6 @@ export interface ScheduleView {
   conflicts: Conflict[];
 }
 
-export interface Suggestion {
-  window: TimeWindow;
-  reason: string | null;
-  confidence: string;
-  withFood: boolean | null;
-  rxcui: string | null;
-  tier: 'grounded' | 'unverified' | 'manual';
-  grounded: boolean;
-  unverified: boolean;
-  needsManual: boolean;
-  time: string;             // window resolved against routine
-}
-
 export interface UserProfile {
   name: string;
   medication: string;
@@ -119,6 +107,8 @@ export interface OnboardingData {
 interface MeResponse {
   user_id: string;
   email: string;
+  role: UserRole;
+  connectionCode?: string | null;
   profile:
     | (UserProfile & { deviceConnected?: boolean; remindMeCount?: number; schedule?: Schedule; routine?: Routine })
     | null;
@@ -128,6 +118,8 @@ interface AppState {
   isAuthenticated: boolean;
   authLoading: boolean;
   email: string | null;
+  role: UserRole | null;
+  connectionCode: string | null;
   isOnboarded: boolean;
   userProfile: UserProfile | null;
   scheduleView: ScheduleView | null;
@@ -138,9 +130,12 @@ interface AppState {
   pendingLogId: string | null;
 
   // Auth actions
-  signup: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string, role: UserRole) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+
+  // Patient connection-code actions
+  regenerateConnectionCode: () => Promise<string>;
 
   // App actions
   completeOnboarding: (data: OnboardingData) => Promise<void>;
@@ -154,7 +149,6 @@ interface AppState {
   resetApp: () => void;
 
   // Scheduling actions
-  fetchSuggestion: (medication: string, withFood?: boolean) => Promise<Suggestion>;
   refreshSchedule: () => Promise<void>;
   saveSchedule: (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => Promise<void>;
   saveRoutine: (routine: Routine) => Promise<void>;
@@ -195,6 +189,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [connectionCode, setConnectionCode] = useState<string | null>(null);
 
   const [isOnboarded, setIsOnboarded] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -226,6 +222,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const hydrateFromMe = useCallback(async (me: MeResponse) => {
     setIsAuthenticated(true);
     setEmail(me.email);
+    setRole(me.role);
+
+    // Caregivers have no medication profile / onboarding; their home is the
+    // connect-to-patient flow. Skip all patient-only hydration.
+    if (me.role === 'caregiver') {
+      setConnectionCode(null);
+      setUserProfile(null);
+      setScheduleView(null);
+      setIsOnboarded(false);
+      setLogs([]);
+      return;
+    }
+
+    setConnectionCode(me.connectionCode ?? null);
     if (me.profile) {
       setUserProfile(profileFromApi(me.profile));
       setIsOnboarded(true);
@@ -265,14 +275,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [hydrateFromMe]);
 
-  const signup = async (emailVal: string, password: string) => {
-    const res = await apiFetch<{ access_token: string; email: string }>('/auth/signup', {
+  const signup = async (emailVal: string, password: string, signupRole: UserRole) => {
+    const res = await apiFetch<{ access_token: string; email: string; role: UserRole }>('/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ email: emailVal, password }),
+      body: JSON.stringify({ email: emailVal, password, role: signupRole }),
     });
     setToken(res.access_token);
     const me = await apiFetch<MeResponse>('/auth/me');
     await hydrateFromMe(me);
+  };
+
+  const regenerateConnectionCode = async (): Promise<string> => {
+    const res = await apiFetch<{ connectionCode: string }>('/connections/regenerate', {
+      method: 'POST',
+    });
+    setConnectionCode(res.connectionCode);
+    return res.connectionCode;
   };
 
   const login = async (emailVal: string, password: string) => {
@@ -294,6 +312,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setToken(null);
     setIsAuthenticated(false);
     setEmail(null);
+    setRole(null);
+    setConnectionCode(null);
     setIsOnboarded(false);
     setUserProfile(null);
     setScheduleView(null);
@@ -381,12 +401,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   // ---- Scheduling actions ------------------------------------------------ //
-  const fetchSuggestion = async (medication: string, withFood?: boolean) =>
-    apiFetch<Suggestion>('/schedule/suggest', {
-      method: 'POST',
-      body: JSON.stringify({ medication, withFood: withFood ?? null }),
-    });
-
   const saveSchedule = async (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => {
     const view = await apiFetch<ScheduleView>('/schedule', { method: 'PUT', body: JSON.stringify(body) });
     setScheduleView(view);
@@ -436,6 +450,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       isAuthenticated,
       authLoading,
       email,
+      role,
+      connectionCode,
       isOnboarded,
       userProfile,
       scheduleView,
@@ -447,6 +463,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       signup,
       login,
       logout,
+      regenerateConnectionCode,
       completeOnboarding,
       updateProfile,
       logDose,
@@ -456,7 +473,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       toggleDeviceConnection,
       skipCheckIn,
       resetApp,
-      fetchSuggestion,
       refreshSchedule,
       saveSchedule,
       saveRoutine,

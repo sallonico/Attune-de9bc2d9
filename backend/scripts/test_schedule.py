@@ -10,7 +10,6 @@ import sys
 from datetime import date, datetime, timezone
 
 from app.services import scheduling as s
-from app.services.drug_timing import extract_from_label
 
 PASS, FAIL = 0, 0
 
@@ -165,34 +164,6 @@ def test_legacy_migration():
     check("migrates flat scheduleTime", sched["time"], "09:15")
     check("defaults to every day", sched["daysOfWeek"], [0, 1, 2, 3, 4, 5, 6])
     check("empty profile is safe", s.ensure_schedule(None)["time"], "08:00")
-
-
-def test_label_extraction():
-    print("extract_from_label (free, grounded)")
-    morning = extract_from_label(
-        "Administer once daily, preferably on an empty stomach, "
-        "one-half to one hour before breakfast."
-    )
-    check("empty-stomach/before breakfast -> morning", morning["window"], "morning")
-    check("empty stomach -> withFood False", morning["withFood"], False)
-    check("morning confidence high", morning["confidence"], "high")
-
-    # Negation must NOT classify as night.
-    neg = extract_from_label(
-        "Do not take this medication at bedtime. "
-        "Take upon arising for the day before any food."
-    )
-    check("negated bedtime is ignored -> morning", neg["window"], "morning")
-
-    night = extract_from_label("Take one tablet at bedtime.")
-    check("bedtime -> night", night["window"], "night")
-
-    food = extract_from_label("Take orally twice daily with meals.")
-    check("with meals -> withFood True", food["withFood"], True)
-    check("food-only -> medium confidence", food["confidence"], "medium")
-
-    check("no timing/food info -> None", extract_from_label("Swallow tablet whole."), None)
-    check("empty label -> None", extract_from_label(""), None)
 
 
 def main():

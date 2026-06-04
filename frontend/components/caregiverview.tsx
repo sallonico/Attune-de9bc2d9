@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { apiFetch } from '../lib/api';
-import { Users, Activity, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Users, Activity, AlertTriangle, ShieldCheck, ArrowLeft } from 'lucide-react';
 
 interface ActivityEntry {
   title: string;
@@ -21,7 +21,24 @@ interface CaregiverSummary {
   recentActivity: ActivityEntry[];
 }
 
-export default function CaregiverView() {
+const ERROR_COPY: Record<string, string> = {
+  caregiver_access_disabled:
+    "This patient hasn't enabled caregiver sharing yet. Ask them to turn on the Caregiver Dashboard in their settings.",
+  not_connected_to_patient: "You're no longer connected to this patient.",
+  profile_not_found: "This patient hasn't finished setting up their account yet.",
+};
+
+/**
+ * Patient adherence/wellness summary. With `patientId` it shows a linked
+ * patient (caregiver context); without it, the signed-in patient's own data.
+ */
+export default function CaregiverView({
+  patientId,
+  onBack,
+}: {
+  patientId?: string;
+  onBack?: () => void;
+} = {}) {
   const [summary, setSummary] = useState<CaregiverSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,17 +48,21 @@ export default function CaregiverView() {
     (async () => {
       setLoading(true);
       setError(null);
+      const path = patientId
+        ? `/connections/patients/${patientId}/summary`
+        : '/caregiver/summary';
       try {
-        const data = await apiFetch<CaregiverSummary>('/caregiver/summary');
+        const data = await apiFetch<CaregiverSummary>(path);
         if (!cancelled) setSummary(data);
       } catch (e) {
-        if (!cancelled) setError((e as Error).message || 'Unable to load caregiver data.');
+        const msg = (e as Error).message || 'Unable to load caregiver data.';
+        if (!cancelled) setError(ERROR_COPY[msg] || msg);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [patientId]);
 
   if (loading) {
     return (
@@ -53,14 +74,35 @@ export default function CaregiverView() {
 
   if (error || !summary) {
     return (
-      <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-6 text-rose-300">
-        {error || 'No caregiver data.'}
+      <div className="space-y-4">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to patients
+          </button>
+        )}
+        <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-6 text-rose-300">
+          {error || 'No caregiver data.'}
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
+
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Back to patients
+        </button>
+      )}
 
       <div className="flex items-center justify-between">
         <div>

@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useAppStore, TimeWindow, Suggestion, Routine, browserTimeZone } from '../lib/store';
+import { useAppStore, TimeWindow, Routine, browserTimeZone } from '../lib/store';
 import {
-  ArrowRight, Check, Pill, Brain, HeartPulse, Users, Sparkles, LogOut,
-  Sun, Sunrise, Sunset, Moon, Clock, Utensils, AlertTriangle, ShieldCheck,
+  ArrowRight, Check, Pill, HeartPulse, Users, Sparkles, LogOut,
+  Sun, Sunrise, Sunset, Moon, Clock, Utensils, AlertTriangle, ShieldCheck, Brain,
 } from 'lucide-react';
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; // index 0=Mon .. 6=Sun
@@ -20,7 +20,7 @@ const WINDOW_META: Record<TimeWindow, { label: string; icon: React.ReactNode }> 
 const TOTAL_STEPS = 5;
 
 export default function Onboarding() {
-  const { completeOnboarding, fetchSuggestion, logout, email } = useAppStore();
+  const { completeOnboarding, logout, email } = useAppStore();
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,11 +29,8 @@ export default function Onboarding() {
   const [medication, setMedication] = useState('');
 
   // Suggestion + chosen schedule
-  const [suggesting, setSuggesting] = useState(false);
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [scheduleTime, setScheduleTime] = useState('08:00');
-  const [window, setWindow] = useState<TimeWindow | null>(null);
-  const [source, setSource] = useState<'ai' | 'user'>('user');
+  const [window, setWindow] = useState<TimeWindow | null>('morning');
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>(ALL_DAYS);
 
   // Routine
@@ -46,36 +43,10 @@ export default function Onboarding() {
   });
 
   const [features, setFeatures] = useState({
-    aiInsights: true,
+    aiInsights: false,
     wellnessCheckIns: true,
     caregiverAccess: false,
   });
-
-  const runSuggestion = async () => {
-    setSuggesting(true);
-    setError(null);
-    try {
-      const s = await fetchSuggestion(medication);
-      setSuggestion(s);
-      setScheduleTime(s.time);
-      setWindow(s.window);
-      // Keep AI-sourced unless we had to fall back to a manual pick.
-      setSource(s.needsManual ? 'user' : 'ai');
-      if (typeof s.withFood === 'boolean') {
-        setRoutine(prev => ({ ...prev, withFood: s.withFood as boolean }));
-      }
-    } catch {
-      // Suggestion is best-effort; fall back to a plain time pick.
-      setSuggestion({
-        window: 'morning', reason: null, confidence: 'low', withFood: null, rxcui: null,
-        tier: 'manual', grounded: false, unverified: false, needsManual: true, time: '08:00',
-      });
-      setWindow('morning');
-      setSource('user');
-    } finally {
-      setSuggesting(false);
-    }
-  };
 
   const handleNext = async () => {
     setError(null);
@@ -83,7 +54,6 @@ export default function Onboarding() {
     if (step === 2) {
       if (!medication) return;
       setStep(3);
-      await runSuggestion();
       return;
     }
     if (step < TOTAL_STEPS) {
@@ -97,7 +67,7 @@ export default function Onboarding() {
         // Anchor dose times to the patient's device timezone so the dashboard
         // shows the time they actually take it (editable later in Schedule).
         profile: { name, medication, scheduleTime, timezone: browserTimeZone(), features },
-        schedule: { time: scheduleTime, daysOfWeek, window, reason: suggestion?.reason ?? null, source, rxcui: suggestion?.rxcui ?? null },
+        schedule: { time: scheduleTime, daysOfWeek, window, reason: null, source: 'user', rxcui: null },
         routine,
       });
     } catch (e) {
@@ -122,7 +92,7 @@ export default function Onboarding() {
     }));
 
   const continueDisabled =
-    submitting || suggesting || (step === 1 && !name) || (step === 2 && !medication) ||
+    submitting || (step === 1 && !name) || (step === 2 && !medication) ||
     (step === 3 && daysOfWeek.length === 0);
 
   return (
@@ -174,7 +144,7 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon gradient="from-indigo-400 to-purple-500"><Pill className="text-white w-6 h-6" /></StepIcon>
               <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">Your Medication</h1>
-              <p className="text-slate-400 mb-8 text-lg">What medication would you like to track? We&apos;ll look up the best time to take it.</p>
+              <p className="text-slate-400 mb-8 text-lg">What medication would you like to track? We&apos;ll use this to set your daily reminder schedule.</p>
               <label className="block text-sm font-medium text-slate-300 mb-2">Medication Name</label>
               <input
                 type="text" value={medication} onChange={(e) => setMedication(e.target.value)} placeholder="e.g. Levothyroxine"
@@ -188,48 +158,14 @@ export default function Onboarding() {
               <StepIcon gradient="from-amber-400 to-orange-500"><Clock className="text-white w-6 h-6" /></StepIcon>
               <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">When to take it</h1>
 
-              {suggesting ? (
-                <div className="flex items-center gap-3 text-slate-400 py-8">
-                  <div className="w-5 h-5 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
-                  Looking up the best timing for {medication}…
-                </div>
-              ) : (
-                <>
-                  {/* Suggestion banner — honors the 3 tiers */}
-                  {suggestion?.grounded && (
-                    <div className="mb-6 bg-teal-500/10 border border-teal-500/30 rounded-2xl p-4 flex gap-3">
-                      <ShieldCheck className="w-5 h-5 text-teal-400 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-sm font-medium text-teal-200 mb-1">
-                          Suggested: {window && WINDOW_META[window].label}
-                          {suggestion.withFood === true && ' · with food'}
-                          {suggestion.withFood === false && ' · empty stomach'}
-                        </p>
-                        {suggestion.reason && <p className="text-sm text-slate-300 leading-relaxed">{suggestion.reason}</p>}
-                        <p className="text-[11px] text-slate-500 mt-2">Based on the FDA drug label · always confirm with your pharmacist.</p>
-                      </div>
-                    </div>
-                  )}
-                  {suggestion?.unverified && (
-                    <div className="mb-6 bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex gap-3">
-                      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-sm font-medium text-amber-200 mb-1">Suggested: {window && WINDOW_META[window].label}</p>
-                        <p className="text-sm text-slate-300">This is a general timing suggestion only — please confirm the right time with your pharmacist.</p>
-                      </div>
-                    </div>
-                  )}
-                  {suggestion?.needsManual && (
-                    <p className="text-slate-400 mb-6">We couldn&apos;t find official timing guidance for this one — choose the time that works for you.</p>
-                  )}
-
+              <>
                   {/* Window picker */}
                   <label className="block text-sm font-medium text-slate-300 mb-2">Time of day</label>
                   <div className="grid grid-cols-4 gap-2 mb-6">
                     {(Object.keys(WINDOW_META) as TimeWindow[]).map((w) => (
                       <button
                         key={w}
-                        onClick={() => { setWindow(w); if (source === 'user') setSource('ai'); }}
+                        onClick={() => setWindow(w)}
                         className={`flex flex-col items-center gap-1 py-3 rounded-xl border text-xs transition-all ${
                           window === w ? 'bg-white/10 border-teal-500/50 text-white' : 'bg-black/20 border-white/10 text-slate-400 hover:bg-white/5'
                         }`}
@@ -244,14 +180,10 @@ export default function Onboarding() {
                   <label className="block text-sm font-medium text-slate-300 mb-2">Exact time</label>
                   <input
                     type="time" value={scheduleTime}
-                    onChange={(e) => { setScheduleTime(e.target.value); setSource('user'); }}
+                    onChange={(e) => setScheduleTime(e.target.value)}
                     className="w-full bg-black/20 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-teal-500/50 focus:border-teal-500 transition-all [color-scheme:dark] mb-2"
                   />
-                  <p className="text-xs text-slate-500 mb-6">
-                    {source === 'ai'
-                      ? 'We’ll keep this aligned to your routine (set next). Edit the time to pin it exactly.'
-                      : 'Pinned to this exact time.'}
-                  </p>
+                  <p className="text-xs text-slate-500 mb-6">Pinned to this exact time.</p>
 
                   {/* Days of week */}
                   <label className="block text-sm font-medium text-slate-300 mb-2">Which days?</label>
@@ -270,7 +202,6 @@ export default function Onboarding() {
                   </div>
                   {daysOfWeek.length === 0 && <p className="text-xs text-rose-400 mt-2">Pick at least one day.</p>}
                 </>
-              )}
             </div>
           )}
 
@@ -335,7 +266,6 @@ export default function Onboarding() {
               <h1 className="text-3xl md:text-4xl font-bold text-white mb-2 tracking-tight">Customize Your Experience</h1>
               <p className="text-slate-400 mb-8 text-lg">Choose the features that matter to you. You can always change these later.</p>
               <div className="space-y-4">
-                <FeatureToggle icon={<Brain className="w-5 h-5 text-indigo-400" />} title="AI Pattern Insights" description="Get personalized suggestions based on your adherence trends." active={features.aiInsights} onClick={() => toggleFeature('aiInsights')} />
                 <FeatureToggle icon={<HeartPulse className="w-5 h-5 text-rose-400" />} title="Wellness Check-ins" description="Quick 1-tap check-ins after doses to track how you feel." active={features.wellnessCheckIns} onClick={() => toggleFeature('wellnessCheckIns')} />
                 <FeatureToggle icon={<Users className="w-5 h-5 text-teal-400" />} title="Caregiver Dashboard" description="Allow a family member or doctor to view your progress." active={features.caregiverAccess} onClick={() => toggleFeature('caregiverAccess')} />
               </div>

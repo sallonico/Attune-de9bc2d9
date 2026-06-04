@@ -5,13 +5,14 @@ import { AppProvider, useAppStore } from '@/lib/store';
 import Onboarding from '@/components/onboarding';
 import Dashboard from '@/components/dashboard';
 import CaregiverView from '@/components/caregiverview';
+import CaregiverApp from '@/components/caregiverapp';
 import ScheduleSettings from '@/components/schedulesettings';
 import WellnessModal from '@/components/wellnessmodal';
 import AuthGate from '@/components/authgate';
 import { Activity, Users, CalendarClock, LogOut } from 'lucide-react';
 
 function MainApp() {
-  const { isAuthenticated, authLoading, isOnboarded, userProfile, resetApp } = useAppStore();
+  const { isAuthenticated, authLoading, role, isOnboarded, userProfile, resetApp } = useAppStore();
   const [activeTab, setActiveTab] = useState<'patient' | 'schedule' | 'caregiver'>('patient');
 
   if (authLoading) {
@@ -24,6 +25,11 @@ function MainApp() {
 
   if (!isAuthenticated) {
     return <AuthGate />;
+  }
+
+  // Caregiver accounts have their own app — no medication onboarding/dashboard.
+  if (role === 'caregiver') {
+    return <CaregiverApp />;
   }
 
   if (!isOnboarded) {

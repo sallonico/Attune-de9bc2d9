@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useState } from "react";
-import { useAppStore } from "../lib/store";
-import { ArrowRight, Mail, Lock, Activity } from "lucide-react";
+import { useAppStore, UserRole } from "../lib/store";
+import { ArrowRight, Mail, Lock, Activity, User, HeartHandshake } from "lucide-react";
 
 export default function AuthGate() {
   const { signup, login } = useAppStore();
   const [mode, setMode] = useState<"login" | "signup">("signup");
+  const [role, setRole] = useState<UserRole>("patient");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -21,7 +22,7 @@ export default function AuthGate() {
     }
     setSubmitting(true);
     try {
-      if (mode === "signup") await signup(email, password);
+      if (mode === "signup") await signup(email, password, role);
       else await login(email, password);
     } catch (err) {
       setError((err as Error).message || "Something went wrong.");
@@ -51,9 +52,33 @@ export default function AuthGate() {
           </h1>
           <p className="text-slate-400 mb-6 text-sm">
             {mode === "signup"
-              ? "Sign up to start tracking your medication."
+              ? role === "patient"
+                ? "Sign up to start tracking your medication."
+                : "Sign up to support someone you care for."
               : "Log in to continue."}
           </p>
+
+          {mode === "signup" && (
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-slate-300 mb-2">I am a…</label>
+              <div className="grid grid-cols-2 gap-3">
+                <RoleCard
+                  active={role === "patient"}
+                  onClick={() => setRole("patient")}
+                  icon={<User className="w-5 h-5" />}
+                  title="Patient"
+                  subtitle="Track my medication"
+                />
+                <RoleCard
+                  active={role === "caregiver"}
+                  onClick={() => setRole("caregiver")}
+                  icon={<HeartHandshake className="w-5 h-5" />}
+                  title="Caregiver"
+                  subtitle="Support a patient"
+                />
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -102,6 +127,13 @@ export default function AuthGate() {
             </button>
           </form>
 
+          {mode === "signup" && role === "caregiver" && (
+            <p className="mt-4 text-xs text-slate-500 leading-relaxed">
+              After signing up, you&apos;ll enter a connection code shared by your patient to
+              link your accounts.
+            </p>
+          )}
+
           <div className="mt-6 text-center text-sm text-slate-400">
             {mode === "signup" ? "Already have an account?" : "New to ATTUNE?"}{" "}
             <button
@@ -117,5 +149,36 @@ export default function AuthGate() {
         </div>
       </div>
     </div>
+  );
+}
+
+function RoleCard({
+  active,
+  onClick,
+  icon,
+  title,
+  subtitle,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex flex-col items-start gap-1 rounded-2xl border p-4 text-left transition-all ${
+        active
+          ? "bg-teal-500/10 border-teal-500/50 shadow-lg shadow-teal-500/10"
+          : "bg-black/20 border-white/10 hover:border-white/20 hover:bg-white/5"
+      }`}
+    >
+      <span className={active ? "text-teal-400" : "text-slate-400"}>{icon}</span>
+      <span className="text-white font-semibold text-sm">{title}</span>
+      <span className="text-xs text-slate-500">{subtitle}</span>
+    </button>
   );
 }

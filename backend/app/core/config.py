@@ -11,13 +11,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:3000"
 
     # Medication-timing suggestions are FREE by default (RxNorm + OpenFDA +
-    # rule-based extraction). The Duke Gateway LLM is an OPTIONAL enhancement,
-    # OFF by default — enabling it can cost budget unless your key has the free
-    # "Mistral on-site". Flip DRUG_AI_ENABLED=true only with a free/cheap model.
-    DRUG_AI_ENABLED: bool = False
-    LITELLM_TOKEN: str = ""
-    LITELLM_MODEL: str = "Mistral on-site"
-    LITELLM_BASE_URL: str = "https://litellm.oit.duke.edu/v1"
+    # rule-based extraction).
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

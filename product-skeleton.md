@@ -231,6 +231,11 @@ npm install   # first time only
 npm run dev
 ```
 
+```bash
+cd /Users/sallonigill/Attune-de9bc2d9/frontend
+npm run dev
+```
+
 Next.js prints a local URL — usually http://localhost:3000. Open it in your browser. The frontend reads `NEXT_PUBLIC_API_BASE_URL` from `frontend/.env.local` (defaults to `http://localhost:8000/api/v1`).
 
 ### Handy dev scripts

@@ -3,8 +3,9 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore, browserTimeZone } from '../lib/store';
 import { apiFetch } from '../lib/api';
+import ConnectionCode from './connectioncode';
 import { format, subDays, isSameDay } from 'date-fns';
-import { Brain, CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
 
 /** True when two instants fall on the same calendar day in the given timezone. */
 function sameDayInTz(a: Date, b: Date, tz: string): boolean {
@@ -37,12 +38,6 @@ interface TrendResponse {
   takenCount: number;
   totalCount: number;
   trendPercentage: number;
-}
-
-interface InsightResponse {
-  detected: boolean;
-  message: string;
-  evidence: { date: string; status: 'taken' | 'missed' }[];
 }
 
 export default function Dashboard() {
@@ -79,7 +74,6 @@ export default function Dashboard() {
   const conflicts = scheduleView?.conflicts ?? [];
   const scheduleReason = scheduleView?.schedule.reason;
   const [trendPercentage, setTrendPercentage] = useState(0);
-  const [insight, setInsight] = useState<InsightResponse | null>(null);
 
   // Server-side trend (refreshes whenever logs change)
   useEffect(() => {
@@ -94,24 +88,6 @@ export default function Dashboard() {
     })();
     return () => { cancelled = true; };
   }, [logs.length]);
-
-  // AI pattern insight
-  useEffect(() => {
-    if (!userProfile?.features.aiInsights) {
-      setInsight(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const i = await apiFetch<InsightResponse>('/insights/pattern');
-        if (!cancelled) setInsight(i);
-      } catch {
-        if (!cancelled) setInsight(null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [logs.length, userProfile?.features.aiInsights]);
 
   // Check if today's dose is taken — "today" as seen in the patient's timezone.
   const todayLog = logs.find(log => sameDayInTz(log.timestamp, new Date(), tz));
@@ -246,42 +222,6 @@ export default function Dashboard() {
       </div>
 
       {/* AI Insight (The Aha Moment) */}
-      {userProfile?.features.aiInsights && insight?.detected && (
-        <div className="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-3xl p-6 relative overflow-hidden group">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 to-purple-500 opacity-50" />
-          <div className="flex items-start gap-4">
-            <div className="p-3 bg-indigo-500/20 rounded-2xl text-indigo-400 shrink-0">
-              <Brain className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="text-lg font-semibold text-white mb-1 flex items-center gap-2">
-                Pattern Detected
-                <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300">
-                  AI Insight
-                </span>
-              </h3>
-              <p className="text-slate-300 leading-relaxed mb-4">
-                {insight.message}
-              </p>
-
-              {insight.evidence.length > 0 && (
-                <div className="bg-black/30 rounded-xl p-4 border border-white/5">
-                  <p className="text-xs text-slate-400 mb-3 uppercase tracking-wider font-semibold">Evidence: Recent Wed/Thu</p>
-                  <div className="flex gap-2">
-                    {insight.evidence.map((e, i) => (
-                      <div
-                        key={`${e.date}-${i}`}
-                        className={`h-8 flex-1 rounded-md ${e.status === 'taken' ? 'bg-teal-500/80' : 'bg-rose-500/80'}`}
-                        title={`${e.date}: ${e.status}`}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -337,6 +277,9 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Caregiver connection code */}
+      <ConnectionCode />
 
     </div>
   );

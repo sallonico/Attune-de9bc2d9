@@ -7,12 +7,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.deps import get_current_user, get_database
-from app.services.drug_timing import suggest_timing
 from app.services.scheduling import (
     ensure_routine,
     ensure_schedule,
     recompute_ai_time,
-    resolve_window_to_time,
     schedule_view,
 )
 
@@ -66,28 +64,6 @@ async def _save(db: AsyncIOMotorDatabase, user_id, schedule: dict) -> None:
 
 def _view(profile: dict) -> dict:
     return schedule_view(profile, datetime.now(timezone.utc))
-
-
-# --------------------------------------------------------------------------- #
-# AI timing suggestion (used during onboarding and when changing meds)
-# --------------------------------------------------------------------------- #
-class SuggestBody(BaseModel):
-    medication: str = Field(min_length=1, max_length=120)
-    withFood: bool | None = None
-
-
-@router.post("/suggest")
-async def suggest(
-    body: SuggestBody,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncIOMotorDatabase = Depends(get_database),
-):
-    # Profile may not exist yet (called mid-onboarding); ensure_routine handles None.
-    profile = await db.profiles.find_one({"user_id": current_user["_id"]})
-    routine = ensure_routine(profile)
-    suggestion = await suggest_timing(body.medication, body.withFood)
-    suggestion["time"] = resolve_window_to_time(suggestion["window"], routine)
-    return suggestion
 
 
 # --------------------------------------------------------------------------- #
