@@ -67,7 +67,7 @@ export default function CaregiverView({
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24">
-        <div className="w-6 h-6 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-tide-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -78,13 +78,13 @@ export default function CaregiverView({
         {onBack && (
           <button
             onClick={onBack}
-            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+            className="flex items-center gap-2 text-sm text-stone-500 hover:text-stone-900 transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
             Back to patients
           </button>
         )}
-        <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-6 text-rose-300">
+        <div className="bg-danger-subtle border border-danger/20 rounded-2xl p-6 text-danger">
           {error || 'No caregiver data.'}
         </div>
       </div>
@@ -97,7 +97,7 @@ export default function CaregiverView({
       {onBack && (
         <button
           onClick={onBack}
-          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+          className="flex items-center gap-2 text-sm text-stone-500 hover:text-stone-900 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to patients
@@ -106,15 +106,15 @@ export default function CaregiverView({
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
-            <Users className="w-8 h-8 text-teal-400" />
+          <h1 className="text-3xl font-bold text-stone-900 tracking-tight flex items-center gap-3">
+            <Users className="w-8 h-8 text-tide-600" />
             Caregiver Dashboard
           </h1>
-          <p className="text-slate-400 mt-1">
+          <p className="text-stone-500 mt-1">
             Monitoring adherence and wellness for {summary.patientName}
           </p>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-emerald-400 text-sm font-medium">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-success-subtle border border-success/20 rounded-full text-success text-sm font-medium">
           <ShieldCheck className="w-4 h-4" />
           Access Active
         </div>
@@ -123,40 +123,40 @@ export default function CaregiverView({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
         {/* Patient Overview Card */}
-        <div className="lg:col-span-2 bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6 md:p-8">
+        <div className="lg:col-span-2 bg-white backdrop-blur-xl border border-stone-200 rounded-3xl p-6 md:p-8">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="text-xl font-semibold text-white">30-Day Overview</h2>
-            <span className="text-sm text-slate-400">Updated just now</span>
+            <h2 className="text-xl font-semibold text-stone-900">30-Day Overview</h2>
+            <span className="text-sm text-stone-500">Updated just now</span>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            <StatBox label="Adherence" value={`${summary.adherence}%`} color="text-teal-400" />
-            <StatBox label="Missed Doses" value={String(summary.missedDoses)} color="text-rose-400" />
-            <StatBox label="Avg Physical" value={`${summary.avgPhysical}/5`} color="text-indigo-400" />
-            <StatBox label="Avg Mood" value={`${summary.avgMood}/5`} color="text-purple-400" />
+            <StatBox label="Adherence" value={`${summary.adherence}%`} color="text-tide-600" />
+            <StatBox label="Missed Doses" value={String(summary.missedDoses)} color="text-danger" />
+            <StatBox label="Avg Physical" value={`${summary.avgPhysical}/5`} color="text-info" />
+            <StatBox label="Avg Mood" value={`${summary.avgMood}/5`} color="text-apricot-600" />
           </div>
 
           {summary.alert && (
-            <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-5 flex gap-4">
-              <AlertTriangle className="w-6 h-6 text-rose-400 shrink-0" />
+            <div className="bg-danger-subtle border border-danger/20 rounded-2xl p-5 flex gap-4">
+              <AlertTriangle className="w-6 h-6 text-danger shrink-0" />
               <div>
-                <h3 className="text-white font-medium mb-1">{summary.alert.title}</h3>
-                <p className="text-slate-300 text-sm leading-relaxed">{summary.alert.body}</p>
+                <h3 className="text-stone-900 font-medium mb-1">{summary.alert.title}</h3>
+                <p className="text-stone-600 text-sm leading-relaxed">{summary.alert.body}</p>
               </div>
             </div>
           )}
         </div>
 
         {/* Recent Activity Feed */}
-        <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6">
-          <h2 className="text-xl font-semibold text-white mb-6 flex items-center gap-2">
-            <Activity className="w-5 h-5 text-slate-400" />
+        <div className="bg-white backdrop-blur-xl border border-stone-200 rounded-3xl p-6">
+          <h2 className="text-xl font-semibold text-stone-900 mb-6 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-stone-500" />
             Recent Activity
           </h2>
 
           <div className="space-y-4">
             {summary.recentActivity.length === 0 && (
-              <p className="text-sm text-slate-500">No activity yet.</p>
+              <p className="text-sm text-stone-400">No activity yet.</p>
             )}
             {summary.recentActivity.map((item, i) => (
               <ActivityItem key={i} {...item} />
@@ -171,8 +171,8 @@ export default function CaregiverView({
 
 function StatBox({ label, value, color }: { label: string, value: string, color: string }) {
   return (
-    <div className="bg-black/20 rounded-2xl p-4 border border-white/5">
-      <p className="text-slate-400 text-sm mb-1">{label}</p>
+    <div className="bg-stone-50 rounded-2xl p-4 border border-stone-200">
+      <p className="text-stone-500 text-sm mb-1">{label}</p>
       <p className={`text-2xl font-bold ${color}`}>{value}</p>
     </div>
   );
@@ -180,22 +180,22 @@ function StatBox({ label, value, color }: { label: string, value: string, color:
 
 function ActivityItem({ title, time, status, note }: ActivityEntry) {
   const colors = {
-    good: 'bg-teal-500/20 text-teal-400 border-teal-500/20',
-    bad: 'bg-rose-500/20 text-rose-400 border-rose-500/20',
-    neutral: 'bg-slate-500/20 text-slate-400 border-slate-500/20'
+    good: 'bg-tide-100 text-tide-600 border-tide-200',
+    bad: 'bg-danger-subtle text-danger border-danger/20',
+    neutral: 'bg-stone-300 text-stone-500 border-stone-200'
   };
 
   return (
     <div className="flex gap-4 relative">
       <div className="flex flex-col items-center">
         <div className={`w-3 h-3 rounded-full mt-1.5 ${colors[status].split(' ')[0]}`} />
-        <div className="w-px h-full bg-white/10 my-1" />
+        <div className="w-px h-full bg-stone-100 my-1" />
       </div>
       <div className="pb-4">
-        <p className="text-white font-medium text-sm">{title}</p>
-        <p className="text-slate-500 text-xs mb-1">{time}</p>
+        <p className="text-stone-900 font-medium text-sm">{title}</p>
+        <p className="text-stone-400 text-xs mb-1">{time}</p>
         {note && (
-          <p className="text-slate-300 text-xs bg-white/5 p-2 rounded-lg mt-2 border border-white/5 inline-block">
+          <p className="text-stone-600 text-xs bg-white p-2 rounded-lg mt-2 border border-stone-200 inline-block">
             &ldquo;{note}&rdquo;
           </p>
         )}

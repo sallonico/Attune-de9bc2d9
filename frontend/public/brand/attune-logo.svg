@@ -1,0 +1,8 @@
+<svg width="240" height="80" viewBox="0 0 240 80" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Attune">
+  <g transform="translate(0,-20)">
+    <path d="M58.5 40 L38 40 A20 20 0 0 0 38 80 L58.5 80 Z" fill="#14A394"></path>
+    <path d="M61.5 40 L82 40 A20 20 0 0 1 82 80 L61.5 80 Z" fill="#E26A39"></path>
+    <path d="M26 60 L47 60 L53 49 L60 71 L67 60 L94 60" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+  </g>
+  <text x="104" y="52" font-family="&#39;Bricolage Grotesque&#39;,&#39;Hanken Grotesk&#39;,sans-serif" font-size="38" font-weight="700" letter-spacing="-0.5" fill="#1F1E1A">attune</text>
+</svg>

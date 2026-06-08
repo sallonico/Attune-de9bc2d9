@@ -9,7 +9,8 @@ import CaregiverApp from '@/components/caregiverapp';
 import ScheduleSettings from '@/components/schedulesettings';
 import WellnessModal from '@/components/wellnessmodal';
 import AuthGate from '@/components/authgate';
-import { Activity, Users, CalendarClock, LogOut } from 'lucide-react';
+import { AttuneLogo } from '@/components/brand/logo';
+import { Users, CalendarClock, LogOut } from 'lucide-react';
 
 function MainApp() {
   const { isAuthenticated, authLoading, role, isOnboarded, userProfile, resetApp } = useAppStore();
@@ -17,8 +18,8 @@ function MainApp() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-tide-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -36,68 +37,47 @@ function MainApp() {
     return <Onboarding />;
   }
 
+  const tabClass = (active: boolean) =>
+    `px-4 py-1.5 rounded-full text-sm font-medium transition-all duration-200 flex items-center gap-2 ${
+      active
+        ? 'bg-white text-tide-700 shadow-[var(--shadow-sm)]'
+        : 'text-stone-500 hover:text-stone-800'
+    }`;
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 selection:bg-teal-500/30">
-      {/* Background Ambient Glow */}
+    <div className="min-h-screen bg-stone-50 text-stone-700 selection:bg-tide-200">
+      {/* Soft radial atmosphere — very low-opacity tide/apricot tint */}
       <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-teal-500/10 rounded-full blur-[120px]" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-indigo-500/10 rounded-full blur-[120px]" />
+        <div className="absolute top-[-25%] left-[-10%] w-[55%] h-[55%] bg-tide-200/30 rounded-full blur-[140px]" />
+        <div className="absolute bottom-[-25%] right-[-10%] w-[55%] h-[55%] bg-apricot-200/25 rounded-full blur-[140px]" />
       </div>
 
-      {/* Navigation */}
-      <nav className="relative z-10 border-b border-white/10 bg-slate-950/50 backdrop-blur-xl sticky top-0">
+      {/* Slim sticky header */}
+      <nav className="relative z-10 border-b border-stone-200 bg-stone-50/80 backdrop-blur-xl sticky top-0">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-teal-400 to-indigo-500 rounded-lg flex items-center justify-center shadow-lg shadow-teal-500/20">
-              <Activity className="w-5 h-5 text-white" />
-            </div>
-            <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">
-              ATTUNE
-            </span>
-          </div>
+          <AttuneLogo />
 
           <div className="flex items-center gap-2 md:gap-4">
-            <div className="flex bg-black/40 p-1 rounded-full border border-white/5">
-              <button
-                onClick={() => setActiveTab('patient')}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
-                  activeTab === 'patient' 
-                    ? 'bg-white/10 text-white shadow-sm' 
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
-                My Dashboard
+            <div className="flex bg-stone-100 p-1 rounded-full border border-stone-200">
+              <button onClick={() => setActiveTab('patient')} className={tabClass(activeTab === 'patient')}>
+                Today
               </button>
-              <button
-                onClick={() => setActiveTab('schedule')}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-                  activeTab === 'schedule'
-                    ? 'bg-white/10 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white hover:bg-white/5'
-                }`}
-              >
+              <button onClick={() => setActiveTab('schedule')} className={tabClass(activeTab === 'schedule')}>
                 <CalendarClock className="w-4 h-4" />
                 <span className="hidden md:inline">Schedule</span>
               </button>
               {userProfile?.features.caregiverAccess && (
-                <button
-                  onClick={() => setActiveTab('caregiver')}
-                  className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-                    activeTab === 'caregiver' 
-                      ? 'bg-white/10 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-white hover:bg-white/5'
-                  }`}
-                >
+                <button onClick={() => setActiveTab('caregiver')} className={tabClass(activeTab === 'caregiver')}>
                   <Users className="w-4 h-4" />
-                  <span className="hidden md:inline">Caregiver View</span>
+                  <span className="hidden md:inline">Caregiver view</span>
                 </button>
               )}
             </div>
 
-            <button 
+            <button
               onClick={resetApp}
-              className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-full transition-colors ml-2"
-              title="Reset Prototype"
+              className="p-2 text-stone-400 hover:text-stone-800 hover:bg-stone-100 rounded-full transition-colors ml-2"
+              title="Reset prototype"
             >
               <LogOut className="w-5 h-5" />
             </button>

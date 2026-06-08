@@ -32,10 +32,10 @@ function fmtTime(hhmm: string | null): string {
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
-const card = 'bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6';
-const inputCls = 'bg-black/20 border border-white/10 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/50 [color-scheme:dark]';
-const btnPrimary = 'inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-teal-500 to-emerald-500 text-white hover:shadow-lg hover:shadow-teal-500/30 transition-all disabled:opacity-50';
-const btnGhost = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-300 bg-white/5 border border-white/10 hover:bg-white/10 transition-colors';
+const card = 'bg-white border border-stone-200 rounded-3xl p-6 shadow-[var(--shadow-sm)]';
+const inputCls = 'bg-stone-50 border border-stone-200 rounded-[14px] px-3 py-2 text-stone-900 text-sm focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all';
+const btnPrimary = 'inline-flex items-center gap-2 px-4 py-2 rounded-[14px] text-sm font-medium bg-tide-500 text-white hover:bg-tide-600 hover:shadow-[var(--shadow-brand)] active:scale-[0.98] transition-all disabled:opacity-50 disabled:active:scale-100';
+const btnGhost = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] text-sm text-stone-600 bg-white border border-stone-200 hover:bg-stone-100 transition-colors';
 
 export default function ScheduleSettings() {
   const {
@@ -55,8 +55,8 @@ export default function ScheduleSettings() {
 
   if (!scheduleView) {
     return (
-      <div className="flex items-center gap-3 text-slate-400 py-16 justify-center">
-        <div className="w-5 h-5 border-2 border-teal-400 border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center gap-3 text-stone-500 py-16 justify-center">
+        <div className="w-5 h-5 border-2 border-tide-500 border-t-transparent rounded-full animate-spin" />
         Loading your schedule…
       </div>
     );
@@ -67,16 +67,16 @@ export default function ScheduleSettings() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
-        <h1 className="text-3xl font-bold text-white tracking-tight">Schedule</h1>
-        <p className="text-slate-400 mt-1">
+        <h1 className="text-3xl font-bold text-stone-900 tracking-tight">Schedule</h1>
+        <p className="text-stone-500 mt-1">
           {userProfile?.medication} · next dose {nextDue ? new Date(nextDue).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: timezone }) : '—'}
         </p>
       </div>
 
       {conflicts.length > 0 && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-2">
+        <div className="bg-warning-subtle border border-warning/30 rounded-2xl p-4 space-y-2">
           {conflicts.map((c, i) => (
-            <div key={i} className="flex items-start gap-3 text-sm text-amber-200">
+            <div key={i} className="flex items-start gap-3 text-sm text-amber-900">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{c.message}</span>
             </div>
@@ -127,16 +127,16 @@ function TimezoneCard({ timezone, onSave }: { timezone: string; onSave: (tz: str
   return (
     <div className={card}>
       <div className="flex items-center gap-2 mb-1">
-        <Globe className="w-5 h-5 text-sky-400" />
-        <h2 className="text-lg font-semibold text-white">Timezone</h2>
+        <Globe className="w-5 h-5 text-info" />
+        <h2 className="text-lg font-semibold text-stone-900">Timezone</h2>
       </div>
-      <p className="text-sm text-slate-400 mb-4">
+      <p className="text-sm text-stone-500 mb-4">
         Your dose times are shown in this timezone. Update it if you travel or set up reminders for someone in another zone.
       </p>
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Timezone</label>
+          <label className="block text-xs text-stone-500 mb-1">Timezone</label>
           <select value={tz} onChange={(e) => setTz(e.target.value)} className={inputCls}>
             {options.map((z) => (
               <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>
@@ -150,7 +150,7 @@ function TimezoneCard({ timezone, onSave }: { timezone: string; onSave: (tz: str
         )}
       </div>
 
-      <p className="text-xs text-slate-500 mt-3">Now in this zone: <span className="text-slate-300">{nowPreview}</span></p>
+      <p className="text-xs text-stone-400 mt-3">Now in this zone: <span className="text-stone-600">{nowPreview}</span></p>
 
       <div className="mt-4">
         <button onClick={save} disabled={saving || !dirty} className={btnPrimary}>
@@ -188,30 +188,30 @@ function DefaultScheduleCard({
   return (
     <div className={card}>
       <div className="flex items-center gap-2 mb-4">
-        <Clock className="w-5 h-5 text-teal-400" />
-        <h2 className="text-lg font-semibold text-white">Default schedule</h2>
+        <Clock className="w-5 h-5 text-tide-600" />
+        <h2 className="text-lg font-semibold text-stone-900">Default schedule</h2>
       </div>
 
       {schedule.window && (
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs text-slate-300 mb-4">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-stone-200 text-xs text-stone-600 mb-4">
           {WINDOW_ICON[schedule.window]}
           {schedule.window[0].toUpperCase() + schedule.window.slice(1)}
-          {schedule.source === 'ai' && <span className="text-teal-400">· AI-suggested</span>}
+          {schedule.source === 'ai' && <span className="text-tide-600">· AI-suggested</span>}
         </div>
       )}
-      {schedule.reason && <p className="text-sm text-slate-400 mb-4 leading-relaxed">{schedule.reason}</p>}
+      {schedule.reason && <p className="text-sm text-stone-500 mb-4 leading-relaxed">{schedule.reason}</p>}
 
       <div className="flex flex-wrap items-end gap-6">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Time</label>
+          <label className="block text-xs text-stone-500 mb-1">Time</label>
           <input type="time" value={time} onChange={(e) => { setTime(e.target.value); setSource('user'); }} className={inputCls} />
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Days</label>
+          <label className="block text-xs text-stone-500 mb-1">Days</label>
           <div className="flex gap-1.5">
             {DAY_FULL.map((lbl, idx) => (
               <button key={idx} onClick={() => toggle(idx)}
-                className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-teal-500 border-teal-500 text-white' : 'bg-black/20 border-white/10 text-slate-400 hover:bg-white/5'}`}>
+                className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-stone-900' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
                 {lbl[0]}
               </button>
             ))}
@@ -223,7 +223,7 @@ function DefaultScheduleCard({
         <button onClick={save} disabled={saving || !dirty || days.length === 0} className={btnPrimary}>
           {saved ? <><Check className="w-4 h-4" /> Saved</> : saving ? 'Saving…' : 'Save schedule'}
         </button>
-        {days.length === 0 && <span className="text-xs text-rose-400">Pick at least one day.</span>}
+        {days.length === 0 && <span className="text-xs text-danger">Pick at least one day.</span>}
       </div>
     </div>
   );
@@ -247,17 +247,17 @@ function DayOverridesCard({
   return (
     <div className={card}>
       <div className="flex items-center gap-2 mb-1">
-        <CalendarDays className="w-5 h-5 text-indigo-400" />
-        <h2 className="text-lg font-semibold text-white">Day-of-week overrides</h2>
+        <CalendarDays className="w-5 h-5 text-apricot-600" />
+        <h2 className="text-lg font-semibold text-stone-900">Day-of-week overrides</h2>
       </div>
-      <p className="text-sm text-slate-400 mb-4">A different time on specific weekdays (e.g. Saturdays at 10:00).</p>
+      <p className="text-sm text-stone-500 mb-4">A different time on specific weekdays (e.g. Saturdays at 10:00).</p>
 
       {entries.length > 0 && (
         <div className="space-y-2 mb-4">
           {entries.map(([wd, t]) => (
-            <div key={wd} className="flex items-center justify-between bg-black/20 border border-white/10 rounded-xl px-4 py-2">
-              <span className="text-sm text-white">{DAY_FULL[Number(wd)]} → {fmtTime(t)}</span>
-              <button onClick={() => void onRemove(Number(wd))} className="text-slate-400 hover:text-rose-400 transition-colors"><Trash2 className="w-4 h-4" /></button>
+            <div key={wd} className="flex items-center justify-between bg-stone-50 border border-stone-200 rounded-xl px-4 py-2">
+              <span className="text-sm text-stone-900">{DAY_FULL[Number(wd)]} → {fmtTime(t)}</span>
+              <button onClick={() => void onRemove(Number(wd))} className="text-stone-500 hover:text-danger transition-colors"><Trash2 className="w-4 h-4" /></button>
             </div>
           ))}
         </div>
@@ -265,13 +265,13 @@ function DayOverridesCard({
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Day</label>
+          <label className="block text-xs text-stone-500 mb-1">Day</label>
           <select value={weekday} onChange={(e) => setWeekday(Number(e.target.value))} className={inputCls}>
             {DAY_FULL.map((lbl, idx) => <option key={idx} value={idx}>{lbl}</option>)}
           </select>
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Time</label>
+          <label className="block text-xs text-stone-500 mb-1">Time</label>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} />
         </div>
         <button onClick={add} disabled={busy} className={btnGhost}><Plus className="w-4 h-4" /> Add</button>
@@ -326,21 +326,21 @@ function DateOverridesCard({
   return (
     <div className={card}>
       <div className="flex items-center gap-2 mb-1">
-        <CalendarOff className="w-5 h-5 text-rose-400" />
-        <h2 className="text-lg font-semibold text-white">Date overrides</h2>
+        <CalendarOff className="w-5 h-5 text-danger" />
+        <h2 className="text-lg font-semibold text-stone-900">Date overrides</h2>
       </div>
-      <p className="text-sm text-slate-400 mb-4">Vacation shifts, one-off times, or pausing reminders for a date range — without deleting your schedule.</p>
+      <p className="text-sm text-stone-500 mb-4">Vacation shifts, one-off times, or pausing reminders for a date range — without deleting your schedule.</p>
 
       {overrides.length > 0 && (
         <div className="space-y-2 mb-4">
           {overrides.map((o) => (
-            <div key={o.id} className="flex items-center justify-between bg-black/20 border border-white/10 rounded-xl px-4 py-2">
-              <div className="flex items-center gap-2 text-sm text-white">
-                {o.type === 'pause' ? <Pause className="w-4 h-4 text-rose-400" /> : o.type === 'shift' ? <ArrowRightLeft className="w-4 h-4 text-amber-400" /> : <Clock className="w-4 h-4 text-teal-400" />}
+            <div key={o.id} className="flex items-center justify-between bg-stone-50 border border-stone-200 rounded-xl px-4 py-2">
+              <div className="flex items-center gap-2 text-sm text-stone-900">
+                {o.type === 'pause' ? <Pause className="w-4 h-4 text-danger" /> : o.type === 'shift' ? <ArrowRightLeft className="w-4 h-4 text-warning" /> : <Clock className="w-4 h-4 text-tide-600" />}
                 <span>{labelFor(o)}</span>
-                {o.note && <span className="text-slate-500">· {o.note}</span>}
+                {o.note && <span className="text-stone-400">· {o.note}</span>}
               </div>
-              <button onClick={() => void onRemove(o.id)} className="text-slate-400 hover:text-rose-400 transition-colors"><Trash2 className="w-4 h-4" /></button>
+              <button onClick={() => void onRemove(o.id)} className="text-stone-500 hover:text-danger transition-colors"><Trash2 className="w-4 h-4" /></button>
             </div>
           ))}
         </div>
@@ -348,7 +348,7 @@ function DateOverridesCard({
 
       <div className="flex flex-wrap items-end gap-3">
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Type</label>
+          <label className="block text-xs text-stone-500 mb-1">Type</label>
           <select value={type} onChange={(e) => setType(e.target.value as OverrideType)} className={inputCls}>
             <option value="shift">Shift by hours</option>
             <option value="set">Set fixed time</option>
@@ -356,32 +356,32 @@ function DateOverridesCard({
           </select>
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Start</label>
+          <label className="block text-xs text-stone-500 mb-1">Start</label>
           <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={inputCls} />
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">End (optional)</label>
+          <label className="block text-xs text-stone-500 mb-1">End (optional)</label>
           <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
         </div>
         {type === 'shift' && (
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Hours (±)</label>
+            <label className="block text-xs text-stone-500 mb-1">Hours (±)</label>
             <input type="number" step={0.5} value={hours} onChange={(e) => setHours(Number(e.target.value))} className={`${inputCls} w-24`} />
           </div>
         )}
         {type === 'set' && (
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Time</label>
+            <label className="block text-xs text-stone-500 mb-1">Time</label>
             <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} />
           </div>
         )}
         <div className="flex-1 min-w-[140px]">
-          <label className="block text-xs text-slate-400 mb-1">Note (optional)</label>
+          <label className="block text-xs text-stone-500 mb-1">Note (optional)</label>
           <input type="text" value={note} maxLength={120} onChange={(e) => setNote(e.target.value)} placeholder="e.g. vacation" className={`${inputCls} w-full`} />
         </div>
         <button onClick={add} disabled={busy} className={btnGhost}><Plus className="w-4 h-4" /> Add</button>
       </div>
-      {err && <p className="text-xs text-rose-400 mt-2">{err}</p>}
+      {err && <p className="text-xs text-danger mt-2">{err}</p>}
     </div>
   );
 }
@@ -407,10 +407,10 @@ function RoutineCard({
   return (
     <div className={card}>
       <div className="flex items-center gap-2 mb-1">
-        <Utensils className="w-5 h-5 text-emerald-400" />
-        <h2 className="text-lg font-semibold text-white">Your routine</h2>
+        <Utensils className="w-5 h-5 text-tide-600" />
+        <h2 className="text-lg font-semibold text-stone-900">Your routine</h2>
       </div>
-      <p className="text-sm text-slate-400 mb-4">Changing your wake/sleep time automatically re-times AI-suggested doses.</p>
+      <p className="text-sm text-stone-500 mb-4">Changing your wake/sleep time automatically re-times AI-suggested doses.</p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Field label="Wake"><input type="time" value={r.wakeTime} onChange={(e) => setR(p => ({ ...p, wakeTime: e.target.value }))} className={`${inputCls} w-full`} /></Field>
@@ -418,9 +418,9 @@ function RoutineCard({
       </div>
 
       <div onClick={() => setR(p => ({ ...p, withFood: !p.withFood }))}
-        className={`cursor-pointer mt-4 p-3 rounded-xl border flex items-center gap-3 ${r.withFood ? 'bg-white/10 border-teal-500/50' : 'bg-black/20 border-white/10'}`}>
-        <span className="flex-1 text-sm text-white">Take with food</span>
-        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${r.withFood ? 'bg-teal-500 border-teal-500' : 'border-slate-600'}`}>{r.withFood && <Check className="w-3 h-3 text-white" />}</div>
+        className={`cursor-pointer mt-4 p-3 rounded-xl border flex items-center gap-3 ${r.withFood ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200'}`}>
+        <span className="flex-1 text-sm text-stone-900">Take with food</span>
+        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${r.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>{r.withFood && <Check className="w-3 h-3 text-stone-900" />}</div>
       </div>
 
       {r.withFood && (
@@ -445,7 +445,7 @@ function RoutineCard({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs text-slate-400 mb-1">{label}</label>
+      <label className="block text-xs text-stone-500 mb-1">{label}</label>
       {children}
     </div>
   );
@@ -456,15 +456,15 @@ function UpcomingCard({ upcoming }: { upcoming: import('../lib/store').UpcomingD
   const items = useMemo(() => upcoming, [upcoming]);
   return (
     <div className={card}>
-      <h2 className="text-lg font-semibold text-white mb-4">Next 7 days</h2>
+      <h2 className="text-lg font-semibold text-stone-900 mb-4">Next 7 days</h2>
       <div className="grid grid-cols-7 gap-2">
         {items.map((u) => {
           const d = new Date(u.date + 'T00:00:00');
           return (
-            <div key={u.date} className={`rounded-xl border p-3 text-center ${u.skipped ? 'bg-black/20 border-white/5' : 'bg-teal-500/10 border-teal-500/20'}`}>
-              <div className="text-xs text-slate-400">{d.toLocaleDateString([], { weekday: 'short' })}</div>
-              <div className="text-xs text-slate-500 mb-1">{d.getDate()}</div>
-              <div className={`text-sm font-medium ${u.skipped ? 'text-slate-600' : 'text-white'}`}>{u.skipped ? '—' : fmtTime(u.time)}</div>
+            <div key={u.date} className={`rounded-xl border p-3 text-center ${u.skipped ? 'bg-stone-100 border-stone-200' : 'bg-tide-50 border-tide-200'}`}>
+              <div className="text-xs text-stone-500">{d.toLocaleDateString([], { weekday: 'short' })}</div>
+              <div className="text-xs text-stone-400 mb-1">{d.getDate()}</div>
+              <div className={`text-sm font-medium ${u.skipped ? 'text-stone-400' : 'text-stone-900'}`}>{u.skipped ? '—' : fmtTime(u.time)}</div>
             </div>
           );
         })}
