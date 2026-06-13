@@ -1,11 +1,13 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { apiFetch, getToken, setToken } from './api';
+import { connectToDevice, disconnectDevice, type BleConnection } from './bluetooth';
 
 export type LogStatus = 'taken' | 'missed';
 export type TimeWindow = 'morning' | 'afternoon' | 'evening' | 'night';
 export type UserRole = 'patient' | 'caregiver';
+export type DeviceStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 /** The device's IANA timezone (e.g. "America/New_York"), or "UTC" if unavailable. */
 export function browserTimeZone(): string {
@@ -126,6 +128,7 @@ interface AppState {
   logs: Log[];
   remindMeCount: number;
   deviceConnected: boolean;
+  deviceStatus: DeviceStatus;
   showWellnessModal: boolean;
   pendingLogId: string | null;
 
@@ -144,7 +147,8 @@ interface AppState {
   remindMeLater: () => Promise<void>;
   refreshLogs: () => Promise<void>;
   submitCheckIn: (logId: string, checkIn: CheckIn) => Promise<void>;
-  toggleDeviceConnection: () => Promise<void>;
+  connectDevice: () => Promise<void>;
+  disconnectDevice: () => Promise<void>;
   skipCheckIn: () => void;
   resetApp: () => void;
 
@@ -198,8 +202,24 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [logs, setLogs] = useState<Log[]>([]);
   const [remindMeCount, setRemindMeCount] = useState(0);
   const [deviceConnected, setDeviceConnected] = useState(false);
+  // Live BLE link state for this tab. Starts 'disconnected' on load because
+  // Web Bluetooth cannot silently re-establish a link after a refresh.
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('disconnected');
+  const bleConnection = useRef<BleConnection | null>(null);
   const [showWellnessModal, setShowWellnessModal] = useState(false);
   const [pendingLogId, setPendingLogId] = useState<string | null>(null);
+
+  // Records the last-known connected/disconnected state on the backend so it
+  // survives a refresh and can be shared (e.g. caregiver view). Best-effort:
+  // the live link's correctness never depends on this call succeeding.
+  const persistDeviceState = useCallback(async (connected: boolean) => {
+    setDeviceConnected(connected);
+    try {
+      await apiFetch('/device', { method: 'POST', body: JSON.stringify({ connected }) });
+    } catch {
+      // ignore — UI already reflects the live link
+    }
+  }, []);
 
   const refreshLogs = useCallback(async () => {
     try {
@@ -319,7 +339,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setScheduleView(null);
     setLogs([]);
     setRemindMeCount(0);
+    disconnectDevice(bleConnection.current);
+    bleConnection.current = null;
     setDeviceConnected(false);
+    setDeviceStatus('disconnected');
   };
 
   const completeOnboarding = async (data: OnboardingData) => {
@@ -395,10 +418,35 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setPendingLogId(null);
   };
 
-  const toggleDeviceConnection = async () => {
-    const res = await apiFetch<{ deviceConnected: boolean }>('/device/toggle', { method: 'POST' });
-    setDeviceConnected(res.deviceConnected);
-  };
+  // Fired by the BLE layer when the link drops for any reason (device powered
+  // off, out of range, or our own disconnect).
+  const handleBleDisconnect = useCallback(() => {
+    bleConnection.current = null;
+    setDeviceStatus('disconnected');
+    void persistDeviceState(false);
+  }, [persistDeviceState]);
+
+  const connectDevice = useCallback(async () => {
+    setDeviceStatus('connecting');
+    try {
+      const conn = await connectToDevice(handleBleDisconnect);
+      bleConnection.current = conn;
+      setDeviceStatus('connected');
+      await persistDeviceState(true);
+    } catch (err) {
+      // The user dismissing the native picker throws a NotFoundError — that's a
+      // cancel, not an error, so fall back to 'disconnected' for it.
+      const cancelled = err instanceof DOMException && err.name === 'NotFoundError';
+      setDeviceStatus(cancelled ? 'disconnected' : 'error');
+    }
+  }, [handleBleDisconnect, persistDeviceState]);
+
+  const disconnectDeviceAction = useCallback(async () => {
+    disconnectDevice(bleConnection.current);
+    bleConnection.current = null;
+    setDeviceStatus('disconnected');
+    await persistDeviceState(false);
+  }, [persistDeviceState]);
 
   // ---- Scheduling actions ------------------------------------------------ //
   const saveSchedule = async (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => {
@@ -458,6 +506,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       logs,
       remindMeCount,
       deviceConnected,
+      deviceStatus,
       showWellnessModal,
       pendingLogId,
       signup,
@@ -470,7 +519,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       remindMeLater,
       refreshLogs,
       submitCheckIn,
-      toggleDeviceConnection,
+      connectDevice,
+      disconnectDevice: disconnectDeviceAction,
       skipCheckIn,
       resetApp,
       refreshSchedule,

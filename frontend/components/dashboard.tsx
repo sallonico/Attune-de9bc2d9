@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore, browserTimeZone } from '../lib/store';
 import { apiFetch } from '../lib/api';
+import { isWebBluetoothSupported } from '../lib/bluetooth';
 import ConnectionCode from './connectioncode';
 import { format, subDays, isSameDay } from 'date-fns';
 import { CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
@@ -48,11 +49,27 @@ export default function Dashboard() {
     logDose,
     remindMeLater,
     remindMeCount,
-    deviceConnected,
-    toggleDeviceConnection
+    deviceStatus,
+    connectDevice,
+    disconnectDevice,
   } = useAppStore();
 
-  const [isConnecting, setIsConnecting] = useState(false);
+  // Web Bluetooth only exists in Chrome/Edge/Opera on desktop + Android.
+  const [bleSupported, setBleSupported] = useState(true);
+  useEffect(() => {
+    setBleSupported(isWebBluetoothSupported());
+  }, []);
+
+  const isConnecting = deviceStatus === 'connecting';
+  const deviceConnected = deviceStatus === 'connected';
+
+  const handleConnectDevice = () => {
+    if (deviceConnected) {
+      void disconnectDevice();
+    } else {
+      void connectDevice();
+    }
+  };
 
   // All dose times are anchored to the patient's timezone (set at onboarding,
   // editable in Schedule settings). We format every label in that zone so the
@@ -94,15 +111,6 @@ export default function Dashboard() {
   const isTakenToday = todayLog?.status === 'taken';
   const isMissedToday = todayLog?.status === 'missed';
 
-  const handleConnectDevice = () => {
-    setIsConnecting(true);
-    // Simulate connection attempt
-    setTimeout(() => {
-      setIsConnecting(false);
-      toggleDeviceConnection();
-    }, 1500);
-  };
-
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
       
@@ -120,24 +128,43 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <button
-          onClick={handleConnectDevice}
-          disabled={isConnecting}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all border ${
-            deviceConnected
-              ? 'bg-tide-50 text-tide-700 border-tide-200 hover:bg-tide-100'
-              : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100'
-          }`}
-        >
-          {isConnecting ? (
-            <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-          ) : deviceConnected ? (
-            <Bluetooth className="w-4 h-4" />
-          ) : (
-            <BluetoothOff className="w-4 h-4" />
+        <div className="flex flex-col items-start md:items-end gap-1">
+          <button
+            onClick={handleConnectDevice}
+            disabled={isConnecting || !bleSupported}
+            title={
+              bleSupported
+                ? undefined
+                : 'Use Chrome or Edge on desktop or Android to connect a device'
+            }
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all border disabled:opacity-60 disabled:cursor-not-allowed ${
+              deviceConnected
+                ? 'bg-tide-50 text-tide-700 border-tide-200 hover:bg-tide-100'
+                : 'bg-white text-stone-600 border-stone-200 hover:bg-stone-100'
+            }`}
+          >
+            {isConnecting ? (
+              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+            ) : deviceConnected ? (
+              <Bluetooth className="w-4 h-4" />
+            ) : (
+              <BluetoothOff className="w-4 h-4" />
+            )}
+            {isConnecting
+              ? 'Connecting…'
+              : deviceConnected
+              ? 'attune connected'
+              : 'Connect device'}
+          </button>
+          {!bleSupported && (
+            <span className="text-xs text-stone-400">
+              Bluetooth needs Chrome or Edge (desktop/Android)
+            </span>
           )}
-          {isConnecting ? 'Connecting…' : deviceConnected ? 'attune connected' : 'Connect device'}
-        </button>
+          {bleSupported && deviceStatus === 'error' && (
+            <span className="text-xs text-danger">Couldn’t connect — try again</span>
+          )}
+        </div>
       </div>
 
       {/* Schedule conflict warnings */}
