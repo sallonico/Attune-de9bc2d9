@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from app.core.config import settings
+from app.services.scheduling import ensure_medications
 
 
 async def run(email: str, reset: bool, seed: bool, days: int) -> None:
@@ -23,7 +24,10 @@ async def run(email: str, reset: bool, seed: bool, days: int) -> None:
     if not user:
         raise SystemExit(f"No user with email={email}")
     uid = user["_id"]
-    print(f"user: {email}  _id={uid}")
+    # Seed against the first medication so the logs map to a real med card.
+    profile = await db.profiles.find_one({"user_id": uid})
+    med_id = ensure_medications(profile)[0]["id"]
+    print(f"user: {email}  _id={uid}  medication_id={med_id}")
 
     if reset:
         res = await db.logs.delete_many({"user_id": uid})
@@ -44,6 +48,7 @@ async def run(email: str, reset: bool, seed: bool, days: int) -> None:
             )
             docs.append({
                 "user_id": uid,
+                "medication_id": med_id,
                 "date_key": d.strftime("%Y-%m-%d"),
                 "timestamp": d,
                 "status": status,

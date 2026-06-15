@@ -1,17 +1,25 @@
 "use client";
 
 import React, { useEffect, useState } from 'react';
-import { useAppStore, browserTimeZone } from '../lib/store';
+import { useAppStore, browserTimeZone, type MedicationView, type Log } from '../lib/store';
 import { apiFetch } from '../lib/api';
 import { isWebBluetoothSupported } from '../lib/bluetooth';
 import ConnectionCode from './connectioncode';
 import { format, subDays, isSameDay } from 'date-fns';
-import { CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Activity, Bluetooth, BluetoothOff, AlertTriangle, Pill } from 'lucide-react';
 
 /** True when two instants fall on the same calendar day in the given timezone. */
 function sameDayInTz(a: Date, b: Date, tz: string): boolean {
   const key = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
   return key(a) === key(b);
+}
+
+/** Friendly "next dose" label for one medication in the patient's timezone. */
+function nextDoseLabel(nextDue: string | null, tz: string): string {
+  if (!nextDue) return '—';
+  const d = new Date(nextDue);
+  const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz });
+  return sameDayInTz(d, new Date(), tz) ? t : `${d.toLocaleDateString([], { weekday: 'short', timeZone: tz })} ${t}`;
 }
 
 /** A ticking "current date & time" in the patient's timezone. */
@@ -48,7 +56,7 @@ export default function Dashboard() {
     logs,
     logDose,
     remindMeLater,
-    remindMeCount,
+    remindMeCounts,
     deviceStatus,
     connectDevice,
     disconnectDevice,
@@ -77,19 +85,11 @@ export default function Dashboard() {
   // of the device's own clock.
   const tz = scheduleView?.timezone || browserTimeZone();
 
-  // Friendly "next dose" from the resolved schedule, falling back to the
-  // legacy flat time if the schedule view hasn't loaded yet.
-  const nextDoseLabel = (() => {
-    if (scheduleView?.nextDue) {
-      const d = new Date(scheduleView.nextDue);
-      const today = sameDayInTz(d, new Date(), tz);
-      const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz });
-      return today ? t : `${d.toLocaleDateString([], { weekday: 'short', timeZone: tz })} ${t}`;
-    }
-    return userProfile?.scheduleTime ?? '—';
-  })();
-  const conflicts = scheduleView?.conflicts ?? [];
-  const scheduleReason = scheduleView?.schedule.reason;
+  const medications = scheduleView?.medications ?? [];
+  // Conflicts surfaced across every medication (de-duplicated by message).
+  const conflicts = Array.from(
+    new Map(medications.flatMap(m => m.conflicts).map(c => [c.message, c])).values()
+  );
   const [trendPercentage, setTrendPercentage] = useState(0);
 
   // Server-side trend (refreshes whenever logs change)
@@ -106,14 +106,9 @@ export default function Dashboard() {
     return () => { cancelled = true; };
   }, [logs.length]);
 
-  // Check if today's dose is taken — "today" as seen in the patient's timezone.
-  const todayLog = logs.find(log => sameDayInTz(log.timestamp, new Date(), tz));
-  const isTakenToday = todayLog?.status === 'taken';
-  const isMissedToday = todayLog?.status === 'missed';
-
   return (
     <div className="space-y-8 animate-in fade-in duration-700">
-      
+
       {/* Header & Device Status */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -121,7 +116,9 @@ export default function Dashboard() {
             Hello, {userProfile?.name}
           </h1>
           <p className="text-stone-500 mt-1">
-            Your {userProfile?.medication} — next dose {nextDoseLabel}
+            {medications.length === 1
+              ? `Your ${medications[0].name}`
+              : `Tracking ${medications.length} medications`}
           </p>
           <div className="mt-2">
             <LiveClock tz={tz} />
@@ -179,74 +176,21 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Primary Action Card — brand fill for emphasis */}
-      <div className="relative overflow-hidden bg-tide-500 rounded-3xl p-8 shadow-[var(--shadow-brand)]">
-        <div className="absolute -right-10 -bottom-16 text-white/10">
-          <Activity className="w-56 h-56" strokeWidth={2.4} />
-        </div>
-
-        <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-8">
-          <div className="flex-1 text-center md:text-left">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 text-sm text-white/90 mb-4">
-              {!isTakenToday && !isMissedToday && (
-                <span className="w-2.5 h-2.5 rounded-full bg-white animate-breathe" />
-              )}
-              Next dose · {nextDoseLabel}
-            </div>
-            {scheduleReason && (
-              <p className="text-xs text-white/70 mb-4 max-w-md mx-auto md:mx-0">{scheduleReason}</p>
-            )}
-
-            {isTakenToday ? (
-              <div>
-                <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 flex items-center justify-center md:justify-start gap-3">
-                  <CheckCircle2 className="w-8 h-8" />
-                  Dose taken
-                </h2>
-                <p className="text-white/80">Nice — you&apos;re on track for today.</p>
-              </div>
-            ) : isMissedToday ? (
-              <div>
-                <h2 className="text-2xl md:text-3xl font-bold text-white mb-2 flex items-center justify-center md:justify-start gap-3">
-                  <XCircle className="w-8 h-8" />
-                  Looks like it slipped by
-                </h2>
-                <p className="text-white/80">It happens. We&apos;ll keep the rhythm going tomorrow.</p>
-              </div>
-            ) : (
-              <div>
-                <h2 className="text-2xl md:text-3xl font-bold text-white mb-2">
-                  Time for your dose
-                </h2>
-                <p className="text-white/80">
-                  {deviceConnected
-                    ? "Press the button on your attune device, or mark it here."
-                    : "Mark it below and we'll keep your rhythm going."}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {!isTakenToday && !isMissedToday && (
-            <div className="flex flex-col gap-3 w-full md:w-auto">
-              <button
-                onClick={() => logDose('taken')}
-                className="bg-white text-tide-700 px-8 py-4 rounded-2xl font-semibold shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] active:scale-[0.98] transition-all duration-200 w-full md:w-64 flex items-center justify-center gap-2"
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                Mark as taken
-              </button>
-
-              <button
-                onClick={remindMeLater}
-                className="px-8 py-4 rounded-2xl font-medium text-white bg-white/15 hover:bg-white/25 transition-all w-full md:w-64 flex items-center justify-center gap-2"
-              >
-                <Clock className="w-5 h-5" />
-                Snooze {remindMeCount > 0 && `(${remindMeCount}/3)`}
-              </button>
-            </div>
-          )}
-        </div>
+      {/* One dose card per medication */}
+      <div className="space-y-5">
+        {medications.map((med, i) => (
+          <MedicationDoseCard
+            key={med.id}
+            med={med}
+            tz={tz}
+            logs={logs}
+            emphasized={medications.length === 1 || i === 0}
+            deviceConnected={deviceConnected}
+            snoozeCount={remindMeCounts[med.id] ?? 0}
+            onTaken={() => logDose(med.id, 'taken')}
+            onSnooze={() => remindMeLater(med.id)}
+          />
+        ))}
       </div>
 
       {/* AI Insight (The Aha Moment) */}
@@ -285,20 +229,25 @@ export default function Dashboard() {
               <div key={i} className="text-center text-xs text-stone-400 font-medium mb-2">{day}</div>
             ))}
 
-            {/* Generate 28 days of heatmap blocks */}
+            {/* Generate 28 days of heatmap blocks. Across all meds: a day is
+                red if any dose was missed, green if any taken (and none missed),
+                otherwise empty. */}
             {Array.from({ length: 28 }).map((_, i) => {
               const date = subDays(new Date(), 27 - i);
-              const log = logs.find(l => isSameDay(l.timestamp, date));
+              const dayLogs = logs.filter(l => isSameDay(l.timestamp, date));
+              const anyMissed = dayLogs.some(l => l.status === 'missed');
+              const anyTaken = dayLogs.some(l => l.status === 'taken');
 
               let bgColor = 'bg-stone-100 border-stone-200'; // No data
-              if (log?.status === 'taken') bgColor = 'bg-tide-500 border-tide-600';
-              if (log?.status === 'missed') bgColor = 'bg-danger border-rose-600';
+              let label = 'No data';
+              if (anyMissed) { bgColor = 'bg-danger border-rose-600'; label = 'Dose missed'; }
+              else if (anyTaken) { bgColor = 'bg-tide-500 border-tide-600'; label = 'On track'; }
 
               return (
                 <div
                   key={i}
                   className={`aspect-square rounded-lg border ${bgColor} transition-all hover:scale-110 cursor-default`}
-                  title={`${format(date, 'MMM d')}: ${log ? log.status : 'No data'}`}
+                  title={`${format(date, 'MMM d')}: ${label}`}
                 />
               );
             })}
@@ -309,6 +258,89 @@ export default function Dashboard() {
       {/* Caregiver connection code */}
       <ConnectionCode />
 
+    </div>
+  );
+}
+
+/** A single medication's "today" card: next-dose, today's status, and the
+ *  taken/snooze actions — each medication is logged independently. */
+function MedicationDoseCard({
+  med, tz, logs, emphasized, deviceConnected, snoozeCount, onTaken, onSnooze,
+}: {
+  med: MedicationView;
+  tz: string;
+  logs: Log[];
+  emphasized: boolean;
+  deviceConnected: boolean;
+  snoozeCount: number;
+  onTaken: () => void;
+  onSnooze: () => void;
+}) {
+  // Today's log for THIS medication, in the patient's timezone.
+  const todayLog = logs.find(l => l.medicationId === med.id && sameDayInTz(l.timestamp, new Date(), tz));
+  const isTaken = todayLog?.status === 'taken';
+  const isMissed = todayLog?.status === 'missed';
+  const label = nextDoseLabel(med.nextDue, tz);
+  const reason = med.schedule.reason;
+
+  return (
+    <div className={`relative overflow-hidden bg-tide-500 rounded-3xl shadow-[var(--shadow-brand)] ${emphasized ? 'p-8' : 'p-6'}`}>
+      <div className="absolute -right-10 -bottom-16 text-white/10">
+        <Activity className={emphasized ? 'w-56 h-56' : 'w-40 h-40'} strokeWidth={2.4} />
+      </div>
+
+      <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
+        <div className="flex-1 text-center md:text-left">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/15 text-sm text-white/90 mb-3">
+            {!isTaken && !isMissed && <span className="w-2.5 h-2.5 rounded-full bg-white animate-breathe" />}
+            <Pill className="w-3.5 h-3.5" />
+            {med.name} · next dose {label}
+          </div>
+          {reason && <p className="text-xs text-white/70 mb-3 max-w-md mx-auto md:mx-0">{reason}</p>}
+
+          {isTaken ? (
+            <h2 className={`font-bold text-white flex items-center justify-center md:justify-start gap-3 ${emphasized ? 'text-2xl md:text-3xl' : 'text-xl'}`}>
+              <CheckCircle2 className={emphasized ? 'w-8 h-8' : 'w-6 h-6'} />
+              {med.name} taken
+            </h2>
+          ) : isMissed ? (
+            <h2 className={`font-bold text-white flex items-center justify-center md:justify-start gap-3 ${emphasized ? 'text-2xl md:text-3xl' : 'text-xl'}`}>
+              <XCircle className={emphasized ? 'w-8 h-8' : 'w-6 h-6'} />
+              Slipped by today
+            </h2>
+          ) : (
+            <div>
+              <h2 className={`font-bold text-white mb-1 ${emphasized ? 'text-2xl md:text-3xl' : 'text-xl'}`}>
+                Time for {med.name}
+              </h2>
+              <p className="text-white/80 text-sm">
+                {deviceConnected
+                  ? 'Press the button on your attune device, or mark it here.'
+                  : "Mark it and we'll keep your rhythm going."}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {!isTaken && !isMissed && (
+          <div className="flex flex-col gap-3 w-full md:w-auto">
+            <button
+              onClick={onTaken}
+              className="bg-white text-tide-700 px-8 py-4 rounded-2xl font-semibold shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] active:scale-[0.98] transition-all duration-200 w-full md:w-56 flex items-center justify-center gap-2"
+            >
+              <CheckCircle2 className="w-5 h-5" />
+              Mark as taken
+            </button>
+            <button
+              onClick={onSnooze}
+              className="px-8 py-4 rounded-2xl font-medium text-white bg-white/15 hover:bg-white/25 transition-all w-full md:w-56 flex items-center justify-center gap-2"
+            >
+              <Clock className="w-5 h-5" />
+              Snooze {snoozeCount > 0 && `(${snoozeCount}/3)`}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

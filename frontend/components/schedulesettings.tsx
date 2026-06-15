@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useAppStore, TimeWindow, browserTimeZone } from '../lib/store';
+import { useAppStore, TimeWindow, MedicationInput, browserTimeZone } from '../lib/store';
 import {
   Clock, CalendarDays, AlertTriangle, Plus, Trash2, Utensils, Sun,
-  Sunrise, Sunset, Moon, CalendarOff, Pause, ArrowRightLeft, Check, Globe,
+  Sunrise, Sunset, Moon, CalendarOff, Pause, ArrowRightLeft, Check, Globe, Pill,
 } from 'lucide-react';
 
 // A short, friendly list; the user's current and device zones are always added.
@@ -17,6 +17,7 @@ const COMMON_TIMEZONES = [
 ];
 
 const DAY_FULL = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // index 0=Mon..6=Sun
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const WINDOW_ICON: Record<TimeWindow, React.ReactNode> = {
   morning: <Sunrise className="w-4 h-4" />,
   afternoon: <Sun className="w-4 h-4" />,
@@ -39,10 +40,12 @@ const btnGhost = 'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] te
 
 export default function ScheduleSettings() {
   const {
-    userProfile, scheduleView, refreshSchedule, updateProfile,
-    saveSchedule, saveRoutine,
+    scheduleView, refreshSchedule, updateProfile,
+    saveSchedule, saveRoutine, addMedication, removeMedication,
     addDayOverride, removeDayOverride, addDateOverride, removeDateOverride,
   } = useAppStore();
+
+  const [activeMedId, setActiveMedId] = useState<string | null>(null);
 
   // Changing the timezone re-anchors every dose time, so refresh the resolved
   // view (nextDue/upcoming) after the profile patch lands.
@@ -62,20 +65,42 @@ export default function ScheduleSettings() {
     );
   }
 
-  const { schedule, routine, timezone, nextDue, upcoming, conflicts } = scheduleView;
+  const { medications, routine, timezone } = scheduleView;
+  const med = medications.find(m => m.id === activeMedId) ?? medications[0];
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div>
         <h1 className="text-3xl font-bold text-stone-900 tracking-tight">Schedule</h1>
         <p className="text-stone-500 mt-1">
-          {userProfile?.medication} · next dose {nextDue ? new Date(nextDue).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: timezone }) : '—'}
+          {medications.length === 1
+            ? `${medications[0].name} · one medication`
+            : `${medications.length} medications, each on its own schedule`}
         </p>
       </div>
 
-      {conflicts.length > 0 && (
+      {/* Medication selector */}
+      {medications.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {medications.map(m => (
+            <button
+              key={m.id}
+              onClick={() => setActiveMedId(m.id)}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium border transition-all ${
+                m.id === med.id ? 'bg-tide-500 border-tide-500 text-white' : 'bg-white border-stone-200 text-stone-600 hover:bg-stone-100'
+              }`}
+            >
+              <Pill className="w-4 h-4" />
+              {m.name}
+              <span className={`text-xs ${m.id === med.id ? 'text-white/80' : 'text-stone-400'}`}>{fmtTime(m.schedule.time)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {med.conflicts.length > 0 && (
         <div className="bg-warning-subtle border border-warning/30 rounded-2xl p-4 space-y-2">
-          {conflicts.map((c, i) => (
+          {med.conflicts.map((c, i) => (
             <div key={i} className="flex items-start gap-3 text-sm text-amber-900">
               <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{c.message}</span>
@@ -85,11 +110,29 @@ export default function ScheduleSettings() {
       )}
 
       <TimezoneCard timezone={timezone} onSave={saveTimezone} />
-      <DefaultScheduleCard schedule={schedule} onSave={saveSchedule} />
-      <DayOverridesCard schedule={schedule} onAdd={addDayOverride} onRemove={removeDayOverride} />
-      <DateOverridesCard onAdd={addDateOverride} onRemove={removeDateOverride} overrides={schedule.dateOverrides} />
+
+      <MedicationScheduleCard
+        key={med.id}
+        med={med}
+        canRemove={medications.length > 1}
+        onSave={(body) => saveSchedule(med.id, body)}
+        onRemove={() => { setActiveMedId(medications.find(m => m.id !== med.id)?.id ?? null); return removeMedication(med.id); }}
+      />
+      <DayOverridesCard
+        schedule={med.schedule}
+        onAdd={(wd, t) => addDayOverride(med.id, wd, t)}
+        onRemove={(wd) => removeDayOverride(med.id, wd)}
+      />
+      <DateOverridesCard
+        overrides={med.schedule.dateOverrides}
+        onAdd={(b) => addDateOverride(med.id, b)}
+        onRemove={(id) => removeDateOverride(med.id, id)}
+      />
+      <UpcomingCard upcoming={med.upcoming} medName={med.name} />
+
+      <AddMedicationCard onAdd={addMedication} />
+
       <RoutineCard routine={routine} onSave={saveRoutine} />
-      <UpcomingCard upcoming={upcoming} />
     </div>
   );
 }
@@ -162,34 +205,56 @@ function TimezoneCard({ timezone, onSave }: { timezone: string; onSave: (tz: str
 }
 
 // --------------------------------------------------------------------------- //
-function DefaultScheduleCard({
-  schedule, onSave,
+type ScheduleSaveBody = {
+  name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null;
+  reason: string | null; source: 'ai' | 'user'; rxcui: string | null;
+};
+
+function MedicationScheduleCard({
+  med, canRemove, onSave, onRemove,
 }: {
-  schedule: import('../lib/store').Schedule;
-  onSave: (b: { time: string; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: 'ai' | 'user'; rxcui: string | null }) => Promise<void>;
+  med: import('../lib/store').MedicationView;
+  canRemove: boolean;
+  onSave: (b: ScheduleSaveBody) => Promise<void>;
+  onRemove: () => Promise<void>;
 }) {
+  const { schedule } = med;
+  const [name, setName] = useState(med.name);
   const [time, setTime] = useState(schedule.time);
   const [days, setDays] = useState<number[]>(schedule.daysOfWeek);
   const [source, setSource] = useState<'ai' | 'user'>(schedule.source);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   const toggle = (d: number) => setDays(p => (p.includes(d) ? p.filter(x => x !== d) : [...p, d].sort()));
-  const dirty = time !== schedule.time || JSON.stringify(days) !== JSON.stringify(schedule.daysOfWeek);
+  const dirty = name !== med.name || time !== schedule.time || JSON.stringify(days) !== JSON.stringify(schedule.daysOfWeek);
 
   const save = async () => {
     setSaving(true);
     try {
-      await onSave({ time, daysOfWeek: days, window: schedule.window, reason: schedule.reason, source, rxcui: schedule.rxcui });
+      await onSave({ name: name.trim() || med.name, time, daysOfWeek: days, window: schedule.window, reason: schedule.reason, source, rxcui: schedule.rxcui });
       setSaved(true); setTimeout(() => setSaved(false), 1500);
     } finally { setSaving(false); }
   };
 
+  const remove = async () => {
+    setRemoving(true);
+    try { await onRemove(); } finally { setRemoving(false); }
+  };
+
   return (
     <div className={card}>
-      <div className="flex items-center gap-2 mb-4">
-        <Clock className="w-5 h-5 text-tide-600" />
-        <h2 className="text-lg font-semibold text-stone-900">Default schedule</h2>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Clock className="w-5 h-5 text-tide-600" />
+          <h2 className="text-lg font-semibold text-stone-900">Schedule for this medication</h2>
+        </div>
+        {canRemove && (
+          <button onClick={remove} disabled={removing} className="inline-flex items-center gap-1.5 text-sm text-stone-500 hover:text-danger transition-colors disabled:opacity-50">
+            <Trash2 className="w-4 h-4" /> {removing ? 'Removing…' : 'Remove'}
+          </button>
+        )}
       </div>
 
       {schedule.window && (
@@ -203,6 +268,10 @@ function DefaultScheduleCard({
 
       <div className="flex flex-wrap items-end gap-6">
         <div>
+          <label className="block text-xs text-stone-500 mb-1">Name</label>
+          <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} className={`${inputCls} w-44`} />
+        </div>
+        <div>
           <label className="block text-xs text-stone-500 mb-1">Time</label>
           <input type="time" value={time} onChange={(e) => { setTime(e.target.value); setSource('user'); }} className={inputCls} />
         </div>
@@ -211,7 +280,7 @@ function DefaultScheduleCard({
           <div className="flex gap-1.5">
             {DAY_FULL.map((lbl, idx) => (
               <button key={idx} onClick={() => toggle(idx)}
-                className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-stone-900' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+                className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
                 {lbl[0]}
               </button>
             ))}
@@ -225,6 +294,69 @@ function DefaultScheduleCard({
         </button>
         {days.length === 0 && <span className="text-xs text-danger">Pick at least one day.</span>}
       </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+function AddMedicationCard({ onAdd }: { onAdd: (b: MedicationInput) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [time, setTime] = useState('08:00');
+  const [days, setDays] = useState<number[]>(ALL_DAYS);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const toggle = (d: number) => setDays(p => (p.includes(d) ? p.filter(x => x !== d) : [...p, d].sort()));
+
+  const add = async () => {
+    setErr(null);
+    if (!name.trim()) { setErr('Enter a medication name.'); return; }
+    if (days.length === 0) { setErr('Pick at least one day.'); return; }
+    setBusy(true);
+    try {
+      await onAdd({ name: name.trim(), time, daysOfWeek: days, window: null, reason: null, source: 'user', rxcui: null });
+      setName(''); setTime('08:00'); setDays(ALL_DAYS); setOpen(false);
+    } catch (e) { setErr((e as Error).message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={card}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Plus className="w-5 h-5 text-tide-600" />
+          <h2 className="text-lg font-semibold text-stone-900">Add a medication</h2>
+        </div>
+        {!open && <button onClick={() => setOpen(true)} className={btnGhost}><Plus className="w-4 h-4" /> Add</button>}
+      </div>
+
+      {open && (
+        <div className="mt-4 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs text-stone-500 mb-1">Name</label>
+            <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Metformin" className={`${inputCls} w-44`} />
+          </div>
+          <div>
+            <label className="block text-xs text-stone-500 mb-1">Time</label>
+            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs text-stone-500 mb-1">Days</label>
+            <div className="flex gap-1.5">
+              {DAY_FULL.map((lbl, idx) => (
+                <button key={idx} onClick={() => toggle(idx)}
+                  className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+                  {lbl[0]}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button onClick={add} disabled={busy} className={btnPrimary}>{busy ? 'Adding…' : 'Add medication'}</button>
+          <button onClick={() => { setOpen(false); setErr(null); }} className={btnGhost}>Cancel</button>
+          {err && <p className="text-xs text-danger w-full">{err}</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -410,7 +542,7 @@ function RoutineCard({
         <Utensils className="w-5 h-5 text-tide-600" />
         <h2 className="text-lg font-semibold text-stone-900">Your routine</h2>
       </div>
-      <p className="text-sm text-stone-500 mb-4">Changing your wake/sleep time automatically re-times AI-suggested doses.</p>
+      <p className="text-sm text-stone-500 mb-4">Shared across all your medications. Changing your wake/sleep time automatically re-times AI-suggested doses.</p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Field label="Wake"><input type="time" value={r.wakeTime} onChange={(e) => setR(p => ({ ...p, wakeTime: e.target.value }))} className={`${inputCls} w-full`} /></Field>
@@ -420,7 +552,7 @@ function RoutineCard({
       <div onClick={() => setR(p => ({ ...p, withFood: !p.withFood }))}
         className={`cursor-pointer mt-4 p-3 rounded-xl border flex items-center gap-3 ${r.withFood ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200'}`}>
         <span className="flex-1 text-sm text-stone-900">Take with food</span>
-        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${r.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>{r.withFood && <Check className="w-3 h-3 text-stone-900" />}</div>
+        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${r.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>{r.withFood && <Check className="w-3 h-3 text-white" />}</div>
       </div>
 
       {r.withFood && (
@@ -452,11 +584,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 // --------------------------------------------------------------------------- //
-function UpcomingCard({ upcoming }: { upcoming: import('../lib/store').UpcomingDose[] }) {
+function UpcomingCard({ upcoming, medName }: { upcoming: import('../lib/store').UpcomingDose[]; medName: string }) {
   const items = useMemo(() => upcoming, [upcoming]);
   return (
     <div className={card}>
-      <h2 className="text-lg font-semibold text-stone-900 mb-4">Next 7 days</h2>
+      <h2 className="text-lg font-semibold text-stone-900 mb-4">Next 7 days · {medName}</h2>
       <div className="grid grid-cols-7 gap-2">
         {items.map((u) => {
           const d = new Date(u.date + 'T00:00:00');

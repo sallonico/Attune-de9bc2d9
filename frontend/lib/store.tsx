@@ -28,6 +28,7 @@ export interface Log {
   id: string;
   timestamp: Date;
   status: LogStatus;
+  medicationId: string;
   checkIn?: CheckIn;
 }
 
@@ -71,19 +72,44 @@ export interface Conflict {
   message: string;
 }
 
-export interface ScheduleView {
+/** A medication and its own schedule. Two meds can share a time or differ. */
+export interface Medication {
+  id: string;
+  name: string;
   schedule: Schedule;
-  routine: Routine;
-  timezone: string;         // IANA name (e.g. "America/New_York") doses are anchored to
+}
+
+/** One medication's resolved view: schedule + next-due/upcoming/conflicts. */
+export interface MedicationView {
+  id: string;
+  name: string;
+  schedule: Schedule;
   nextDue: string | null;   // ISO datetime (carries the user's tz offset)
   upcoming: UpcomingDose[];
   conflicts: Conflict[];
 }
 
+export interface ScheduleView {
+  medications: MedicationView[];
+  routine: Routine;         // shared across all meds
+  timezone: string;         // IANA name (e.g. "America/New_York") doses are anchored to
+}
+
+/** A medication + schedule as sent to the server (onboarding / add). */
+export interface MedicationInput {
+  name: string;
+  time: string;             // HH:mm
+  daysOfWeek: number[];
+  window: TimeWindow | null;
+  reason?: string | null;
+  source?: 'ai' | 'user';
+  rxcui?: string | null;
+}
+
 export interface UserProfile {
   name: string;
-  medication: string;
-  scheduleTime: string; // HH:mm
+  medications: Medication[];
+  medication: string;   // legacy display string: joined medication names
   timezone: string;     // IANA name, e.g. "America/New_York"
   features: {
     aiInsights: boolean;
@@ -94,26 +120,28 @@ export interface UserProfile {
 
 // Everything completeOnboarding needs to persist in one go.
 export interface OnboardingData {
-  profile: UserProfile;
-  schedule: {
-    time: string;
-    daysOfWeek: number[];
-    window: TimeWindow | null;
-    reason: string | null;
-    source: 'ai' | 'user';
-    rxcui: string | null;
+  profile: {
+    name: string;
+    medications: MedicationInput[];
+    timezone: string;
+    features: UserProfile['features'];
   };
   routine: Routine;
 }
+
+type ApiProfile = UserProfile & {
+  deviceConnected?: boolean;
+  remindMeCounts?: Record<string, number>;
+  schedule?: Schedule;
+  routine?: Routine;
+};
 
 interface MeResponse {
   user_id: string;
   email: string;
   role: UserRole;
   connectionCode?: string | null;
-  profile:
-    | (UserProfile & { deviceConnected?: boolean; remindMeCount?: number; schedule?: Schedule; routine?: Routine })
-    | null;
+  profile: ApiProfile | null;
 }
 
 interface AppState {
@@ -126,7 +154,7 @@ interface AppState {
   userProfile: UserProfile | null;
   scheduleView: ScheduleView | null;
   logs: Log[];
-  remindMeCount: number;
+  remindMeCounts: Record<string, number>;
   deviceConnected: boolean;
   deviceStatus: DeviceStatus;
   showWellnessModal: boolean;
@@ -142,9 +170,9 @@ interface AppState {
 
   // App actions
   completeOnboarding: (data: OnboardingData) => Promise<void>;
-  updateProfile: (patch: Partial<UserProfile>) => Promise<void>;
-  logDose: (status: LogStatus) => Promise<void>;
-  remindMeLater: () => Promise<void>;
+  updateProfile: (patch: Partial<Pick<UserProfile, 'name' | 'timezone' | 'features'>>) => Promise<void>;
+  logDose: (medicationId: string, status: LogStatus) => Promise<void>;
+  remindMeLater: (medicationId: string) => Promise<void>;
   refreshLogs: () => Promise<void>;
   submitCheckIn: (logId: string, checkIn: CheckIn) => Promise<void>;
   connectDevice: () => Promise<void>;
@@ -152,14 +180,16 @@ interface AppState {
   skipCheckIn: () => void;
   resetApp: () => void;
 
-  // Scheduling actions
+  // Scheduling actions (per medication)
   refreshSchedule: () => Promise<void>;
-  saveSchedule: (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => Promise<void>;
+  saveSchedule: (medicationId: string, body: { name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: 'ai' | 'user'; rxcui: string | null }) => Promise<void>;
   saveRoutine: (routine: Routine) => Promise<void>;
-  addDayOverride: (weekday: number, time: string) => Promise<void>;
-  removeDayOverride: (weekday: number) => Promise<void>;
-  addDateOverride: (body: Omit<DateOverride, 'id'>) => Promise<void>;
-  removeDateOverride: (id: string) => Promise<void>;
+  addMedication: (body: MedicationInput) => Promise<void>;
+  removeMedication: (medicationId: string) => Promise<void>;
+  addDayOverride: (medicationId: string, weekday: number, time: string) => Promise<void>;
+  removeDayOverride: (medicationId: string, weekday: number) => Promise<void>;
+  addDateOverride: (medicationId: string, body: Omit<DateOverride, 'id'>) => Promise<void>;
+  removeDateOverride: (medicationId: string, id: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -168,6 +198,7 @@ interface ApiLog {
   id: string;
   timestamp: string;
   status: LogStatus;
+  medicationId: string;
   checkIn?: CheckIn;
 }
 
@@ -175,15 +206,14 @@ const fromApiLog = (l: ApiLog): Log => ({
   id: l.id,
   timestamp: new Date(l.timestamp),
   status: l.status,
+  medicationId: l.medicationId,
   checkIn: l.checkIn,
 });
 
-const profileFromApi = (
-  p: UserProfile & { deviceConnected?: boolean; remindMeCount?: number }
-): UserProfile => ({
+const profileFromApi = (p: ApiProfile): UserProfile => ({
   name: p.name,
-  medication: p.medication,
-  scheduleTime: p.scheduleTime,
+  medications: p.medications ?? [],
+  medication: p.medication ?? (p.medications ?? []).map(m => m.name).join(', '),
   // Older profiles created before tz support fall back to the device zone.
   timezone: p.timezone || browserTimeZone(),
   features: p.features,
@@ -200,7 +230,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [scheduleView, setScheduleView] = useState<ScheduleView | null>(null);
   const [logs, setLogs] = useState<Log[]>([]);
-  const [remindMeCount, setRemindMeCount] = useState(0);
+  const [remindMeCounts, setRemindMeCounts] = useState<Record<string, number>>({});
   const [deviceConnected, setDeviceConnected] = useState(false);
   // Live BLE link state for this tab. Starts 'disconnected' on load because
   // Web Bluetooth cannot silently re-establish a link after a refresh.
@@ -260,7 +290,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setUserProfile(profileFromApi(me.profile));
       setIsOnboarded(true);
       if (typeof me.profile.deviceConnected === 'boolean') setDeviceConnected(me.profile.deviceConnected);
-      if (typeof me.profile.remindMeCount === 'number') setRemindMeCount(me.profile.remindMeCount);
+      if (me.profile.remindMeCounts) setRemindMeCounts(me.profile.remindMeCounts);
       await Promise.all([refreshLogs(), refreshSchedule()]);
     } else {
       setUserProfile(null);
@@ -338,7 +368,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setUserProfile(null);
     setScheduleView(null);
     setLogs([]);
-    setRemindMeCount(0);
+    setRemindMeCounts({});
     disconnectDevice(bleConnection.current);
     bleConnection.current = null;
     setDeviceConnected(false);
@@ -346,17 +376,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const completeOnboarding = async (data: OnboardingData) => {
-    // 1. Create the profile (existing shape — unchanged contract).
-    const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
+    // 1. Create the profile (name, medications + their schedules, tz, features).
+    const res = await apiFetch<ApiProfile>(
       '/profile',
       { method: 'POST', body: JSON.stringify(data.profile) }
     );
     setUserProfile(profileFromApi(res));
     if (typeof res.deviceConnected === 'boolean') setDeviceConnected(res.deviceConnected);
-    if (typeof res.remindMeCount === 'number') setRemindMeCount(res.remindMeCount);
+    if (res.remindMeCounts) setRemindMeCounts(res.remindMeCounts);
 
-    // 2. Persist the schedule, then 3. the routine (recomputes AI-sourced time).
-    await apiFetch<ScheduleView>('/schedule', { method: 'PUT', body: JSON.stringify(data.schedule) });
+    // 2. Persist the shared routine (recomputes any AI-sourced dose times).
     const view = await apiFetch<ScheduleView>('/schedule/routine', {
       method: 'PUT',
       body: JSON.stringify(data.routine),
@@ -365,25 +394,25 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setIsOnboarded(true);
   };
 
-  const updateProfile = async (patch: Partial<UserProfile>) => {
-    const res = await apiFetch<UserProfile & { deviceConnected?: boolean; remindMeCount?: number }>(
+  const updateProfile = async (patch: Partial<Pick<UserProfile, 'name' | 'timezone' | 'features'>>) => {
+    const res = await apiFetch<ApiProfile>(
       '/profile',
       { method: 'PATCH', body: JSON.stringify(patch) }
     );
     setUserProfile(profileFromApi(res));
   };
 
-  const logDose = async (status: LogStatus) => {
+  const logDose = async (medicationId: string, status: LogStatus) => {
     const created = await apiFetch<ApiLog>('/logs', {
       method: 'POST',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ medicationId, status }),
     });
     const newLog = fromApiLog(created);
     setLogs(prev => {
       const others = prev.filter(l => l.id !== newLog.id);
       return [...others, newLog].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     });
-    setRemindMeCount(0);
+    setRemindMeCounts(prev => ({ ...prev, [medicationId]: 0 }));
 
     if (status === 'taken' && userProfile?.features.wellnessCheckIns) {
       setPendingLogId(newLog.id);
@@ -391,12 +420,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const remindMeLater = async () => {
-    const res = await apiFetch<{ remindMeCount: number; autoMissed: boolean }>(
+  const remindMeLater = async (medicationId: string) => {
+    const res = await apiFetch<{ medicationId: string; remindMeCount: number; autoMissed: boolean }>(
       '/reminders/remind-later',
-      { method: 'POST' }
+      { method: 'POST', body: JSON.stringify({ medicationId }) }
     );
-    setRemindMeCount(res.remindMeCount);
+    setRemindMeCounts(prev => ({ ...prev, [res.medicationId]: res.remindMeCount }));
     if (res.autoMissed) {
       await refreshLogs();
     }
@@ -448,10 +477,24 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     await persistDeviceState(false);
   }, [persistDeviceState]);
 
-  // ---- Scheduling actions ------------------------------------------------ //
-  const saveSchedule = async (body: OnboardingData['schedule'] & { daysOfWeek: number[] }) => {
-    const view = await apiFetch<ScheduleView>('/schedule', { method: 'PUT', body: JSON.stringify(body) });
+  // ---- Scheduling actions (per medication) ------------------------------- //
+  // Each action returns the full multi-med ScheduleView; we also re-sync the
+  // profile's medications list (names can change) from it.
+  const applyView = (view: ScheduleView) => {
     setScheduleView(view);
+    setUserProfile(prev => prev ? {
+      ...prev,
+      medications: view.medications.map(m => ({ id: m.id, name: m.name, schedule: m.schedule })),
+      medication: view.medications.map(m => m.name).join(', '),
+    } : prev);
+  };
+
+  const saveSchedule = async (
+    medicationId: string,
+    body: { name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: 'ai' | 'user'; rxcui: string | null },
+  ) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}`, { method: 'PUT', body: JSON.stringify(body) });
+    applyView(view);
   };
 
   const saveRoutine = async (routine: Routine) => {
@@ -459,33 +502,46 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       method: 'PUT',
       body: JSON.stringify(routine),
     });
-    setScheduleView(view);
+    applyView(view);
   };
 
-  const addDayOverride = async (weekday: number, time: string) => {
-    const view = await apiFetch<ScheduleView>('/schedule/day-override', {
-      method: 'POST',
-      body: JSON.stringify({ weekday, time }),
-    });
-    setScheduleView(view);
-  };
-
-  const removeDayOverride = async (weekday: number) => {
-    const view = await apiFetch<ScheduleView>(`/schedule/day-override/${weekday}`, { method: 'DELETE' });
-    setScheduleView(view);
-  };
-
-  const addDateOverride = async (body: Omit<DateOverride, 'id'>) => {
-    const view = await apiFetch<ScheduleView>('/schedule/date-override', {
+  const addMedication = async (body: MedicationInput) => {
+    const view = await apiFetch<ScheduleView>('/schedule/medications', {
       method: 'POST',
       body: JSON.stringify(body),
     });
-    setScheduleView(view);
+    applyView(view);
   };
 
-  const removeDateOverride = async (id: string) => {
-    const view = await apiFetch<ScheduleView>(`/schedule/date-override/${id}`, { method: 'DELETE' });
-    setScheduleView(view);
+  const removeMedication = async (medicationId: string) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/medications/${medicationId}`, { method: 'DELETE' });
+    applyView(view);
+  };
+
+  const addDayOverride = async (medicationId: string, weekday: number, time: string) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}/day-override`, {
+      method: 'POST',
+      body: JSON.stringify({ weekday, time }),
+    });
+    applyView(view);
+  };
+
+  const removeDayOverride = async (medicationId: string, weekday: number) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}/day-override/${weekday}`, { method: 'DELETE' });
+    applyView(view);
+  };
+
+  const addDateOverride = async (medicationId: string, body: Omit<DateOverride, 'id'>) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}/date-override`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    applyView(view);
+  };
+
+  const removeDateOverride = async (medicationId: string, id: string) => {
+    const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}/date-override/${id}`, { method: 'DELETE' });
+    applyView(view);
   };
 
   const resetApp = () => {
@@ -504,7 +560,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       userProfile,
       scheduleView,
       logs,
-      remindMeCount,
+      remindMeCounts,
       deviceConnected,
       deviceStatus,
       showWellnessModal,
@@ -526,6 +582,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       refreshSchedule,
       saveSchedule,
       saveRoutine,
+      addMedication,
+      removeMedication,
       addDayOverride,
       removeDayOverride,
       addDateOverride,
