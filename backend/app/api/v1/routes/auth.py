@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.core.deps import get_current_user, get_database, user_role
 from app.core.security import create_access_token, hash_password, verify_password
 from app.services.connections import generate_unique_code
-from app.services.scheduling import ensure_routine, ensure_schedule
+from app.services.scheduling import ensure_medications, ensure_routine, ensure_schedule
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,11 +30,12 @@ def _public_profile(profile: dict | None) -> dict | None:
         return None
     return {
         "name": profile.get("name"),
+        "medications": ensure_medications(profile),
         "medication": profile.get("medication"),
         "scheduleTime": profile.get("scheduleTime"),
         "features": profile.get("features", {}),
         "deviceConnected": profile.get("deviceConnected", False),
-        "remindMeCount": profile.get("remindMeCount", 0),
+        "remindMeCounts": profile.get("remindMeCounts", {}),
         "schedule": ensure_schedule(profile),
         "routine": ensure_routine(profile),
     }

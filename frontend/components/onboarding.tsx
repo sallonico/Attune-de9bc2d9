@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useAppStore, TimeWindow, Routine, browserTimeZone } from '../lib/store';
+import { useAppStore, TimeWindow, Routine, MedicationInput, browserTimeZone } from '../lib/store';
 import {
   ArrowRight, Check, Pill, HeartPulse, Users, Sparkles, LogOut,
   Sun, Sunrise, Sunset, Moon, Clock, Utensils, Brain,
@@ -19,6 +19,17 @@ const WINDOW_META: Record<TimeWindow, { label: string; icon: React.ReactNode }> 
 
 const TOTAL_STEPS = 5;
 
+// A medication being set up: name + its own schedule. Each med carries its own
+// time/days so two meds can be at the same time or at different times.
+interface MedDraft {
+  name: string;
+  time: string;
+  window: TimeWindow | null;
+  daysOfWeek: number[];
+}
+
+const newMedDraft = (): MedDraft => ({ name: '', time: '08:00', window: 'morning', daysOfWeek: ALL_DAYS });
+
 export default function Onboarding() {
   const { completeOnboarding, logout, email } = useAppStore();
   const [step, setStep] = useState(1);
@@ -26,14 +37,27 @@ export default function Onboarding() {
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState('');
-  const [medication, setMedication] = useState('');
 
-  // Suggestion + chosen schedule
-  const [scheduleTime, setScheduleTime] = useState('08:00');
-  const [window, setWindow] = useState<TimeWindow | null>('morning');
-  const [daysOfWeek, setDaysOfWeek] = useState<number[]>(ALL_DAYS);
+  // The patient picks how many meds (1–5), names each, then sets a schedule for
+  // each. We keep 5 drafts around so changing the count doesn't lose entries.
+  const [medCount, setMedCount] = useState(1);
+  const [meds, setMeds] = useState<MedDraft[]>(() => Array.from({ length: 5 }, newMedDraft));
 
-  // Routine
+  const activeMeds = meds.slice(0, medCount);
+  const namesComplete = activeMeds.every(m => m.name.trim().length > 0);
+  const schedulesComplete = activeMeds.every(m => m.daysOfWeek.length > 0);
+
+  const updateMed = (idx: number, patch: Partial<MedDraft>) =>
+    setMeds(prev => prev.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
+
+  const toggleMedDay = (idx: number, d: number) =>
+    setMeds(prev => prev.map((m, i) => {
+      if (i !== idx) return m;
+      const has = m.daysOfWeek.includes(d);
+      return { ...m, daysOfWeek: has ? m.daysOfWeek.filter(x => x !== d) : [...m.daysOfWeek, d].sort() };
+    }));
+
+  // Routine (shared across all meds)
   const [routine, setRoutine] = useState<Routine>({
     wakeTime: '07:00',
     sleepTime: '23:00',
@@ -51,11 +75,8 @@ export default function Onboarding() {
   const handleNext = async () => {
     setError(null);
     if (step === 1 && !name) return;
-    if (step === 2) {
-      if (!medication) return;
-      setStep(3);
-      return;
-    }
+    if (step === 2 && !namesComplete) return;
+    if (step === 3 && !schedulesComplete) return;
     if (step < TOTAL_STEPS) {
       setStep(step + 1);
       return;
@@ -63,11 +84,19 @@ export default function Onboarding() {
     // Final step -> submit everything.
     setSubmitting(true);
     try {
+      const medications: MedicationInput[] = activeMeds.map(m => ({
+        name: m.name.trim(),
+        time: m.time,
+        daysOfWeek: m.daysOfWeek,
+        window: m.window,
+        reason: null,
+        source: 'user',
+        rxcui: null,
+      }));
       await completeOnboarding({
         // Anchor dose times to the patient's device timezone so the dashboard
         // shows the time they actually take it (editable later in Schedule).
-        profile: { name, medication, scheduleTime, timezone: browserTimeZone(), features },
-        schedule: { time: scheduleTime, daysOfWeek, window, reason: null, source: 'user', rxcui: null },
+        profile: { name, medications, timezone: browserTimeZone(), features },
         routine,
       });
     } catch (e) {
@@ -80,9 +109,6 @@ export default function Onboarding() {
   const toggleFeature = (key: keyof typeof features) =>
     setFeatures(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const toggleDay = (d: number) =>
-    setDaysOfWeek(prev => (prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d].sort()));
-
   const toggleVariableDay = (d: number) =>
     setRoutine(prev => ({
       ...prev,
@@ -92,8 +118,8 @@ export default function Onboarding() {
     }));
 
   const continueDisabled =
-    submitting || (step === 1 && !name) || (step === 2 && !medication) ||
-    (step === 3 && daysOfWeek.length === 0);
+    submitting || (step === 1 && !name) || (step === 2 && !namesComplete) ||
+    (step === 3 && !schedulesComplete);
 
   return (
     <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6 relative overflow-hidden">
@@ -143,65 +169,104 @@ export default function Onboarding() {
           {step === 2 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon tone="apricot"><Pill className="w-6 h-6" /></StepIcon>
-              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">Your medication</h1>
-              <p className="text-stone-500 mb-8 text-lg">What would you like to keep time with? We&apos;ll use this to set your daily reminder schedule.</p>
-              <label className="block text-sm font-medium text-stone-700 mb-2">Medication name</label>
-              <input
-                type="text" value={medication} onChange={(e) => setMedication(e.target.value)} placeholder="e.g. Levothyroxine"
-                className="w-full bg-stone-50 border border-stone-200 rounded-[14px] px-4 py-3 text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all"
-              />
+              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">Your medications</h1>
+              <p className="text-stone-500 mb-8 text-lg">What would you like to keep time with? You&apos;ll set a time for each one next.</p>
+
+              <label className="block text-sm font-medium text-stone-700 mb-2">How many medications?</label>
+              <div className="grid grid-cols-5 gap-2 mb-6">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setMedCount(n)}
+                    className={`py-3 rounded-[14px] border text-sm font-medium transition-all ${
+                      medCount === n ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+
+              <div className="space-y-3">
+                {activeMeds.map((m, i) => (
+                  <div key={i}>
+                    <label className="block text-sm font-medium text-stone-700 mb-2">
+                      {medCount === 1 ? 'Medication name' : `Medication ${i + 1} name`}
+                    </label>
+                    <input
+                      type="text" value={m.name} onChange={(e) => updateMed(i, { name: e.target.value })} placeholder="e.g. Levothyroxine"
+                      className="w-full bg-stone-50 border border-stone-200 rounded-[14px] px-4 py-3 text-stone-900 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon tone="tide"><Clock className="w-6 h-6" /></StepIcon>
-              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">When to take it</h1>
+              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">When to take {medCount === 1 ? 'it' : 'each one'}</h1>
+              <p className="text-stone-500 mb-6 text-lg">
+                {medCount === 1
+                  ? 'Set the time and days for your medication.'
+                  : 'Each medication has its own time and days — set them the same or different.'}
+              </p>
 
-              <>
-                  {/* Window picker */}
-                  <label className="block text-sm font-medium text-stone-700 mb-2 mt-6">Time of day</label>
-                  <div className="grid grid-cols-4 gap-2 mb-6">
-                    {(Object.keys(WINDOW_META) as TimeWindow[]).map((w) => (
-                      <button
-                        key={w}
-                        onClick={() => setWindow(w)}
-                        className={`flex flex-col items-center gap-1 py-3 rounded-[14px] border text-xs transition-all ${
-                          window === w ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
-                        }`}
-                      >
-                        {WINDOW_META[w].icon}
-                        {WINDOW_META[w].label}
-                      </button>
-                    ))}
+              <div className="space-y-5">
+                {activeMeds.map((m, i) => (
+                  <div key={i} className={medCount > 1 ? 'rounded-2xl border border-stone-200 p-5 bg-stone-50/50' : ''}>
+                    {medCount > 1 && (
+                      <div className="flex items-center gap-2 mb-4">
+                        <Pill className="w-4 h-4 text-apricot-600" />
+                        <h2 className="font-semibold text-stone-900">{m.name || `Medication ${i + 1}`}</h2>
+                      </div>
+                    )}
+
+                    {/* Window picker */}
+                    <label className="block text-sm font-medium text-stone-700 mb-2">Time of day</label>
+                    <div className="grid grid-cols-4 gap-2 mb-4">
+                      {(Object.keys(WINDOW_META) as TimeWindow[]).map((w) => (
+                        <button
+                          key={w}
+                          onClick={() => updateMed(i, { window: w })}
+                          className={`flex flex-col items-center gap-1 py-3 rounded-[14px] border text-xs transition-all ${
+                            m.window === w ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
+                          }`}
+                        >
+                          {WINDOW_META[w].icon}
+                          {WINDOW_META[w].label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Exact time */}
+                    <label className="block text-sm font-medium text-stone-700 mb-2">Exact time</label>
+                    <input
+                      type="time" value={m.time}
+                      onChange={(e) => updateMed(i, { time: e.target.value })}
+                      className="w-full bg-white border border-stone-200 rounded-[14px] px-4 py-3 text-stone-900 font-mono focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all mb-4"
+                    />
+
+                    {/* Days of week */}
+                    <label className="block text-sm font-medium text-stone-700 mb-2">Which days?</label>
+                    <div className="flex gap-2">
+                      {DAY_LABELS.map((lbl, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => toggleMedDay(i, idx)}
+                          className={`w-10 h-10 rounded-full text-sm font-medium border transition-all ${
+                            m.daysOfWeek.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'
+                          }`}
+                        >
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                    {m.daysOfWeek.length === 0 && <p className="text-xs text-danger mt-2">Pick at least one day.</p>}
                   </div>
-
-                  {/* Exact time */}
-                  <label className="block text-sm font-medium text-stone-700 mb-2">Exact time</label>
-                  <input
-                    type="time" value={scheduleTime}
-                    onChange={(e) => setScheduleTime(e.target.value)}
-                    className="w-full bg-stone-50 border border-stone-200 rounded-[14px] px-4 py-3 text-stone-900 font-mono focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all mb-2"
-                  />
-                  <p className="text-xs text-stone-500 mb-6">Pinned to this exact time.</p>
-
-                  {/* Days of week */}
-                  <label className="block text-sm font-medium text-stone-700 mb-2">Which days?</label>
-                  <div className="flex gap-2">
-                    {DAY_LABELS.map((lbl, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => toggleDay(idx)}
-                        className={`w-10 h-10 rounded-full text-sm font-medium border transition-all ${
-                          daysOfWeek.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
-                        }`}
-                      >
-                        {lbl}
-                      </button>
-                    ))}
-                  </div>
-                  {daysOfWeek.length === 0 && <p className="text-xs text-danger mt-2">Pick at least one day.</p>}
-                </>
+                ))}
+              </div>
             </div>
           )}
 
@@ -223,7 +288,7 @@ export default function Onboarding() {
                 }`}
               >
                 <Utensils className="w-5 h-5 text-tide-600" />
-                <span className="flex-1 text-stone-900 text-sm">I take this medication with food</span>
+                <span className="flex-1 text-stone-900 text-sm">I take medication with food</span>
                 <div className={`w-6 h-6 rounded-full border flex items-center justify-center ${routine.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>
                   {routine.withFood && <Check className="w-4 h-4 text-white" />}
                 </div>

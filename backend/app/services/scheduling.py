@@ -21,6 +21,11 @@ ALL_DAYS = [0, 1, 2, 3, 4, 5, 6]
 NEAR_MEAL_MINUTES = 45
 NEXT_DUE_HORIZON_DAYS = 15
 
+# Stable id given to the single medication of a profile created before
+# multi-medication support. Legacy logs (written with no ``medication_id``) are
+# treated as belonging to this id so nothing orphans on migration.
+LEGACY_MED_ID = "primary"
+
 
 # --------------------------------------------------------------------------- #
 # Small HH:mm / date helpers
@@ -112,6 +117,55 @@ def ensure_routine(profile: dict | None) -> dict:
     base_meals.update(routine.get("mealTimes") or {})
     routine["mealTimes"] = base_meals
     return routine
+
+
+# --------------------------------------------------------------------------- #
+# Multiple medications: each med owns a full schedule (so two meds can sit at
+# the same time or at completely different times). The routine above is shared
+# across all of a person's medications. Pure functions, like everything else
+# here — id assignment lives in the route layer.
+# --------------------------------------------------------------------------- #
+def normalize_medication(med: dict | None) -> dict:
+    """Return a complete medication dict ``{id, name, schedule}``, filling any
+    missing schedule fields the same way ``ensure_schedule`` does."""
+    med = med or {}
+    return {
+        "id": med.get("id") or LEGACY_MED_ID,
+        "name": med.get("name") or "",
+        "schedule": ensure_schedule({"schedule": med.get("schedule")}),
+    }
+
+
+def ensure_medications(profile: dict | None) -> list[dict]:
+    """Return the profile's medications, lazily migrating a legacy single-med
+    profile (flat ``medication`` + embedded ``schedule``) into a one-element list
+    keyed by ``LEGACY_MED_ID`` so its existing logs keep mapping cleanly."""
+    profile = profile or {}
+    meds = profile.get("medications")
+    if meds:
+        return [normalize_medication(m) for m in meds]
+    return [{
+        "id": LEGACY_MED_ID,
+        "name": profile.get("medication") or "",
+        "schedule": ensure_schedule(profile),
+    }]
+
+
+def derive_profile_mirrors(meds: list[dict]) -> dict:
+    """Legacy flat fields kept in sync so older readers (display strings, the
+    profile serializer) keep working without knowing about the medications list.
+    ``medication`` is the joined names; ``scheduleTime``/``schedule`` mirror the
+    first medication."""
+    first = meds[0] if meds else {"schedule": default_schedule()}
+    return {
+        "medication": ", ".join(m["name"] for m in meds if m.get("name")),
+        "scheduleTime": first["schedule"]["time"],
+        "schedule": first["schedule"],
+    }
+
+
+def find_medication(meds: list[dict], med_id: str) -> dict | None:
+    return next((m for m in meds if m["id"] == med_id), None)
 
 
 # --------------------------------------------------------------------------- #
@@ -323,4 +377,33 @@ def schedule_view(profile: dict | None, now: datetime) -> dict:
         "nextDue": nd.isoformat() if nd else None,
         "upcoming": upcoming(sched, routine, now, 7, tz),
         "conflicts": detect_conflicts(sched, routine),
+    }
+
+
+def medication_view(med: dict, routine: dict, now: datetime, tz: tzinfo) -> dict:
+    """The resolved view for one medication: its schedule plus next-due,
+    7-day upcoming, and conflicts — each computed against the shared routine."""
+    sched = med["schedule"]
+    nd = next_due(sched, routine, now, tz)
+    return {
+        "id": med["id"],
+        "name": med["name"],
+        "schedule": sched,
+        "nextDue": nd.isoformat() if nd else None,
+        "upcoming": upcoming(sched, routine, now, 7, tz),
+        "conflicts": detect_conflicts(sched, routine),
+    }
+
+
+def medications_view(profile: dict | None, now: datetime) -> dict:
+    """The full multi-medication schedule view returned by ``GET /schedule``:
+    a per-medication view list plus the shared routine and timezone."""
+    meds = ensure_medications(profile)
+    routine = ensure_routine(profile)
+    tz_name = (profile or {}).get("timezone") or DEFAULT_TZ
+    tz = resolve_tz(tz_name)
+    return {
+        "medications": [medication_view(m, routine, now, tz) for m in meds],
+        "routine": routine,
+        "timezone": tz_name,
     }

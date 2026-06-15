@@ -1,4 +1,6 @@
+import uuid
 from datetime import datetime, timezone
+from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,7 +8,15 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.deps import get_current_user, get_database
-from app.services.scheduling import DEFAULT_TZ, ensure_routine, ensure_schedule
+from app.services.scheduling import (
+    ALL_DAYS,
+    DEFAULT_TZ,
+    default_schedule,
+    derive_profile_mirrors,
+    ensure_medications,
+    ensure_routine,
+    ensure_schedule,
+)
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -39,17 +49,43 @@ class Features(BaseModel):
     caregiverAccess: bool = False
 
 
+class MedicationInput(BaseModel):
+    """One medication and its own default schedule. Two medications may share a
+    time or sit at completely different times — each carries its own."""
+    name: str = Field(min_length=1, max_length=120)
+    time: str
+    daysOfWeek: list[int] = Field(default_factory=lambda: list(ALL_DAYS), min_length=1)
+    window: str | None = None
+    reason: str | None = Field(default=None, max_length=400)
+    source: Literal["ai", "user"] = "user"
+    rxcui: str | None = None
+
+    @field_validator("time")
+    @classmethod
+    def _t(cls, v: str) -> str:
+        return _validate_hhmm(v)
+
+    @field_validator("daysOfWeek")
+    @classmethod
+    def _d(cls, v: list[int]) -> list[int]:
+        cleaned = sorted(set(v))
+        if any(d < 0 or d > 6 for d in cleaned):
+            raise ValueError("daysOfWeek entries must be 0..6 (Mon..Sun)")
+        return cleaned
+
+    @field_validator("window")
+    @classmethod
+    def _w(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("morning", "afternoon", "evening", "night"):
+            raise ValueError("invalid window")
+        return v
+
+
 class ProfileBody(BaseModel):
     name: str = Field(min_length=1, max_length=80)
-    medication: str = Field(min_length=1, max_length=120)
-    scheduleTime: str
+    medications: list[MedicationInput] = Field(min_length=1, max_length=10)
     timezone: str = DEFAULT_TZ
     features: Features = Field(default_factory=Features)
-
-    @field_validator("scheduleTime")
-    @classmethod
-    def _valid(cls, v: str) -> str:
-        return _validate_hhmm(v)
 
     @field_validator("timezone")
     @classmethod
@@ -59,15 +95,8 @@ class ProfileBody(BaseModel):
 
 class ProfilePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=80)
-    medication: str | None = Field(default=None, min_length=1, max_length=120)
-    scheduleTime: str | None = None
     timezone: str | None = None
     features: Features | None = None
-
-    @field_validator("scheduleTime")
-    @classmethod
-    def _valid(cls, v: str | None) -> str | None:
-        return _validate_hhmm(v) if v is not None else v
 
     @field_validator("timezone")
     @classmethod
@@ -75,15 +104,31 @@ class ProfilePatch(BaseModel):
         return _validate_tz(v) if v is not None else v
 
 
+def _build_medications(items: list[MedicationInput]) -> list[dict]:
+    """Turn the onboarding payload into stored medication docs, each with a
+    fresh id and a complete schedule."""
+    meds: list[dict] = []
+    for m in items:
+        sched = default_schedule(
+            time=m.time, window=m.window, reason=m.reason, source=m.source, rxcui=m.rxcui
+        )
+        sched["daysOfWeek"] = m.daysOfWeek
+        meds.append({"id": uuid.uuid4().hex, "name": m.name, "schedule": sched})
+    return meds
+
+
 def _serialize(profile: dict) -> dict:
+    meds = ensure_medications(profile)
     return {
         "name": profile["name"],
-        "medication": profile["medication"],
-        "scheduleTime": profile["scheduleTime"],
+        "medications": meds,
+        # Legacy mirrors so older readers keep working.
+        "medication": profile.get("medication", ""),
+        "scheduleTime": profile.get("scheduleTime", ""),
         "timezone": profile.get("timezone", DEFAULT_TZ),
         "features": profile.get("features", {}),
         "deviceConnected": profile.get("deviceConnected", False),
-        "remindMeCount": profile.get("remindMeCount", 0),
+        "remindMeCounts": profile.get("remindMeCounts", {}),
         "schedule": ensure_schedule(profile),
         "routine": ensure_routine(profile),
     }
@@ -96,13 +141,14 @@ async def upsert_profile(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     now = datetime.now(timezone.utc)
+    meds = _build_medications(body.medications)
     await db.profiles.update_one(
         {"user_id": current_user["_id"]},
         {
             "$set": {
                 "name": body.name,
-                "medication": body.medication,
-                "scheduleTime": body.scheduleTime,
+                "medications": meds,
+                **derive_profile_mirrors(meds),
                 "timezone": body.timezone,
                 "features": body.features.model_dump(),
                 "updated_at": now,
@@ -110,7 +156,7 @@ async def upsert_profile(
             "$setOnInsert": {
                 "user_id": current_user["_id"],
                 "deviceConnected": False,
-                "remindMeCount": 0,
+                "remindMeCounts": {},
                 "created_at": now,
             },
         },
@@ -143,10 +189,6 @@ async def patch_profile(
     update: dict = {}
     if body.name is not None:
         update["name"] = body.name
-    if body.medication is not None:
-        update["medication"] = body.medication
-    if body.scheduleTime is not None:
-        update["scheduleTime"] = body.scheduleTime
     if body.timezone is not None:
         update["timezone"] = body.timezone
     if body.features is not None:
