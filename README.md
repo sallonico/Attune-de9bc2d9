@@ -54,9 +54,6 @@ Grouped by area; each line reflects code that exists today.
 **Wellness check-ins (optional toggle)**
 - Post-dose modal: physical (1–5), emotional (1–5), optional note (≤500 chars), attached to the day's log.
 
-**Insights (rule-based, free)**
-- Wed/Thu skip-pattern detector with evidence (`/insights/pattern`), gated on a minimum log count.
-
 **Caregiver view (optional toggle)**
 - 30-day summary: adherence %, missed doses, avg physical/mood, recent activity, alert on 2+ consecutive misses.
 
