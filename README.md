@@ -227,21 +227,7 @@ flowchart TB
 
 ---
 
-## 7. Use of AI
-
-### Where AI is (and isn't)
-
-| Surface | Technique | Model | Default | Status |
-|---|---|---|---|---|
-| **Pattern insight** | Rule-based statistical detector (Wed/Thu misses in the last 8 occurrences, ≥4 threshold), gated on a minimum log count | None (deterministic code) | On if `aiInsights` toggle | Built (`backend/app/api/v1/routes/insights.py`) |
-
-**The honest picture:** the only "AI"-branded feature that exists in code is the **pattern insight**, and it is a transparent, free, rule-based heuristic — no model, no external calls, and it cannot hallucinate. There is **no LLM and no external drug-data lookup** in the backend (no RxNorm/OpenFDA, no LiteLLM/OpenAI client). Dose times are set manually by the user during onboarding and resolved against their routine entirely by local code in `services/scheduling.py`.
-
-> A grounded, FDA-label-based timing suggestion (RxNorm + OpenFDA + an optional justification-free LLM) was part of the original product vision but is **not implemented** — see §10 / `product-skeleton.md`. The `schedule.source`/`reason`/`window`/`rxcui` fields exist in the data model to support it later, but nothing populates them today.
-
----
-
-## 8. Key User Flows
+## 7. Key User Flows
 
 ### Diagram — Flow 1: Onboarding (Mermaid sequence)
 
@@ -322,7 +308,7 @@ sequenceDiagram
 
 ---
 
-## 9. PRD Field Extract
+## 8. PRD Field Extract
 
 This table reports only **what the repository actually shows** for each field — it makes no comparison to any PRD and no judgement about whether the code matches a spec.
 
