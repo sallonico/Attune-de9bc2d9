@@ -1,34 +1,48 @@
 "use client";
 
 import React, { useState } from 'react';
-import { useAppStore, TimeWindow, Routine, MedicationInput, browserTimeZone } from '../lib/store';
+import {
+  useAppStore, Routine, DayRoutine, MedicationInput, FoodRequirement,
+  ScheduleType, browserTimeZone,
+} from '../lib/store';
 import {
   ArrowRight, Check, Pill, HeartPulse, Users, Sparkles, LogOut,
-  Sun, Sunrise, Sunset, Moon, Clock, Utensils, Brain,
+  Sun, Moon, Clock, Utensils, Brain, CalendarDays,
 } from 'lucide-react';
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; // index 0=Mon .. 6=Sun
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
-const WINDOW_META: Record<TimeWindow, { label: string; icon: React.ReactNode }> = {
-  morning: { label: 'Morning', icon: <Sunrise className="w-4 h-4" /> },
-  afternoon: { label: 'Afternoon', icon: <Sun className="w-4 h-4" /> },
-  evening: { label: 'Evening', icon: <Sunset className="w-4 h-4" /> },
-  night: { label: 'Night', icon: <Moon className="w-4 h-4" /> },
-};
-
 const TOTAL_STEPS = 5;
 
-// A medication being set up: name + its own schedule. Each med carries its own
-// time/days so two meds can be at the same time or at different times.
+// Food rules shown to the patient. Order matters — "No restriction" first so the
+// simplest answer is the default and the others are progressive.
+const FOOD_OPTIONS: { value: FoodRequirement; label: string; hint: string }[] = [
+  { value: 'none', label: 'No food rule', hint: 'Take any time' },
+  { value: 'with_food', label: 'With food', hint: 'Take during a meal' },
+  { value: 'without_food', label: 'On empty stomach', hint: 'Away from meals' },
+  { value: 'before_meals', label: 'Before meals', hint: '~30 min before eating' },
+  { value: 'after_meals', label: 'After meals', hint: 'Just after eating' },
+];
+
+// A medication being set up. We collect *requirements* and let the server generate
+// concrete dose times from the routine (source: 'auto') — so the patient never has
+// to hand-pick clock times during onboarding.
 interface MedDraft {
   name: string;
-  time: string;
-  window: TimeWindow | null;
-  daysOfWeek: number[];
+  dosesPerDay: number;
+  foodRequirement: FoodRequirement;
+  bedtimeOnly: boolean;
 }
 
-const newMedDraft = (): MedDraft => ({ name: '', time: '08:00', window: 'morning', daysOfWeek: ALL_DAYS });
+const newMedDraft = (): MedDraft => ({
+  name: '', dosesPerDay: 1, foodRequirement: 'none', bedtimeOnly: false,
+});
+
+const emptyDayRoutine = (): DayRoutine => ({
+  wakeTime: '09:00', sleepTime: '23:30', withFood: false,
+  mealTimes: { breakfast: '10:00', lunch: '13:30', dinner: '19:00' },
+});
 
 export default function Onboarding() {
   const { completeOnboarding, logout, email } = useAppStore();
@@ -38,33 +52,35 @@ export default function Onboarding() {
 
   const [name, setName] = useState('');
 
-  // The patient picks how many meds (1–5), names each, then sets a schedule for
-  // each. We keep 5 drafts around so changing the count doesn't lose entries.
+  // 1–5 medications; keep 5 drafts so changing the count doesn't lose entries.
   const [medCount, setMedCount] = useState(1);
   const [meds, setMeds] = useState<MedDraft[]>(() => Array.from({ length: 5 }, newMedDraft));
 
   const activeMeds = meds.slice(0, medCount);
   const namesComplete = activeMeds.every(m => m.name.trim().length > 0);
-  const schedulesComplete = activeMeds.every(m => m.daysOfWeek.length > 0);
 
   const updateMed = (idx: number, patch: Partial<MedDraft>) =>
     setMeds(prev => prev.map((m, i) => (i === idx ? { ...m, ...patch } : m)));
 
-  const toggleMedDay = (idx: number, d: number) =>
-    setMeds(prev => prev.map((m, i) => {
-      if (i !== idx) return m;
-      const has = m.daysOfWeek.includes(d);
-      return { ...m, daysOfWeek: has ? m.daysOfWeek.filter(x => x !== d) : [...m.daysOfWeek, d].sort() };
-    }));
-
-  // Routine (shared across all meds)
+  // Routine (shared baseline across all meds; weekend/per-day variants optional)
   const [routine, setRoutine] = useState<Routine>({
     wakeTime: '07:00',
     sleepTime: '23:00',
     withFood: false,
     mealTimes: { breakfast: '08:00', lunch: '12:30', dinner: '18:30' },
     variableDays: [],
+    scheduleType: 'same',
+    weekendRoutine: null,
+    dayRoutines: {},
   });
+
+  const setScheduleType = (t: ScheduleType) =>
+    setRoutine(prev => ({
+      ...prev,
+      scheduleType: t,
+      // Seed a weekend routine the first time the patient opts into one.
+      weekendRoutine: t === 'weekday_weekend' ? (prev.weekendRoutine ?? emptyDayRoutine()) : prev.weekendRoutine,
+    }));
 
   const [features, setFeatures] = useState({
     aiInsights: false,
@@ -76,21 +92,26 @@ export default function Onboarding() {
     setError(null);
     if (step === 1 && !name) return;
     if (step === 2 && !namesComplete) return;
-    if (step === 3 && !schedulesComplete) return;
     if (step < TOTAL_STEPS) {
       setStep(step + 1);
       return;
     }
-    // Final step -> submit everything.
+    // Final step -> submit everything. Medications are 'auto': the server
+    // generates dose times from each med's requirements + the routine.
     setSubmitting(true);
     try {
       const medications: MedicationInput[] = activeMeds.map(m => ({
         name: m.name.trim(),
-        time: m.time,
-        daysOfWeek: m.daysOfWeek,
-        window: m.window,
+        requirements: {
+          dosesPerDay: m.dosesPerDay,
+          foodRequirement: m.foodRequirement,
+          bedtimeOnly: m.bedtimeOnly,
+          minSpacingMinutes: null,
+        },
+        daysOfWeek: ALL_DAYS,
+        window: null,
         reason: null,
-        source: 'user',
+        source: 'auto',
         rxcui: null,
       }));
       await completeOnboarding({
@@ -109,17 +130,8 @@ export default function Onboarding() {
   const toggleFeature = (key: keyof typeof features) =>
     setFeatures(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const toggleVariableDay = (d: number) =>
-    setRoutine(prev => ({
-      ...prev,
-      variableDays: prev.variableDays.includes(d)
-        ? prev.variableDays.filter(x => x !== d)
-        : [...prev.variableDays, d].sort(),
-    }));
-
   const continueDisabled =
-    submitting || (step === 1 && !name) || (step === 2 && !namesComplete) ||
-    (step === 3 && !schedulesComplete);
+    submitting || (step === 1 && !name) || (step === 2 && !namesComplete);
 
   return (
     <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6 relative overflow-hidden">
@@ -170,7 +182,7 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon tone="apricot"><Pill className="w-6 h-6" /></StepIcon>
               <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">Your medications</h1>
-              <p className="text-stone-500 mb-8 text-lg">What would you like to keep time with? You&apos;ll set a time for each one next.</p>
+              <p className="text-stone-500 mb-8 text-lg">What would you like to keep time with? We&apos;ll ask how each one is taken next.</p>
 
               <label className="block text-sm font-medium text-stone-700 mb-2">How many medications?</label>
               <div className="grid grid-cols-5 gap-2 mb-6">
@@ -206,65 +218,20 @@ export default function Onboarding() {
           {step === 3 && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon tone="tide"><Clock className="w-6 h-6" /></StepIcon>
-              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">When to take {medCount === 1 ? 'it' : 'each one'}</h1>
+              <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">How do you take {medCount === 1 ? 'it' : 'each one'}?</h1>
               <p className="text-stone-500 mb-6 text-lg">
-                {medCount === 1
-                  ? 'Set the time and days for your medication.'
-                  : 'Each medication has its own time and days — set them the same or different.'}
+                Just the essentials — we&apos;ll pick sensible reminder times from your routine. You can fine-tune them anytime.
               </p>
 
               <div className="space-y-5">
                 {activeMeds.map((m, i) => (
-                  <div key={i} className={medCount > 1 ? 'rounded-2xl border border-stone-200 p-5 bg-stone-50/50' : ''}>
-                    {medCount > 1 && (
-                      <div className="flex items-center gap-2 mb-4">
-                        <Pill className="w-4 h-4 text-apricot-600" />
-                        <h2 className="font-semibold text-stone-900">{m.name || `Medication ${i + 1}`}</h2>
-                      </div>
-                    )}
-
-                    {/* Window picker */}
-                    <label className="block text-sm font-medium text-stone-700 mb-2">Time of day</label>
-                    <div className="grid grid-cols-4 gap-2 mb-4">
-                      {(Object.keys(WINDOW_META) as TimeWindow[]).map((w) => (
-                        <button
-                          key={w}
-                          onClick={() => updateMed(i, { window: w })}
-                          className={`flex flex-col items-center gap-1 py-3 rounded-[14px] border text-xs transition-all ${
-                            m.window === w ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
-                          }`}
-                        >
-                          {WINDOW_META[w].icon}
-                          {WINDOW_META[w].label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Exact time */}
-                    <label className="block text-sm font-medium text-stone-700 mb-2">Exact time</label>
-                    <input
-                      type="time" value={m.time}
-                      onChange={(e) => updateMed(i, { time: e.target.value })}
-                      className="w-full bg-white border border-stone-200 rounded-[14px] px-4 py-3 text-stone-900 font-mono focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all mb-4"
-                    />
-
-                    {/* Days of week */}
-                    <label className="block text-sm font-medium text-stone-700 mb-2">Which days?</label>
-                    <div className="flex gap-2">
-                      {DAY_LABELS.map((lbl, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => toggleMedDay(i, idx)}
-                          className={`w-10 h-10 rounded-full text-sm font-medium border transition-all ${
-                            m.daysOfWeek.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'
-                          }`}
-                        >
-                          {lbl}
-                        </button>
-                      ))}
-                    </div>
-                    {m.daysOfWeek.length === 0 && <p className="text-xs text-danger mt-2">Pick at least one day.</p>}
-                  </div>
+                  <MedRequirementsCard
+                    key={i}
+                    med={m}
+                    showName={medCount > 1}
+                    index={i}
+                    onChange={(patch) => updateMed(i, patch)}
+                  />
                 ))}
               </div>
             </div>
@@ -274,54 +241,60 @@ export default function Onboarding() {
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <StepIcon tone="apricot"><Sun className="w-6 h-6" /></StepIcon>
               <h1 className="text-3xl md:text-4xl font-bold text-stone-900 mb-2 tracking-tight">Your daily routine</h1>
-              <p className="text-stone-500 mb-8 text-lg">This personalizes your reminders and keeps suggested times realistic.</p>
+              <p className="text-stone-500 mb-8 text-lg">This keeps suggested dose times realistic — meals, waking, and bedtime.</p>
 
-              <div className="grid grid-cols-2 gap-4 mb-6">
-                <TimeField label="I usually wake up" value={routine.wakeTime} onChange={(v) => setRoutine(p => ({ ...p, wakeTime: v }))} />
-                <TimeField label="I usually go to sleep" value={routine.sleepTime} onChange={(v) => setRoutine(p => ({ ...p, sleepTime: v }))} />
-              </div>
+              <DayRoutineFields
+                value={routine}
+                onChange={(patch) => setRoutine(p => ({ ...p, ...patch }))}
+              />
 
-              <div
-                onClick={() => setRoutine(p => ({ ...p, withFood: !p.withFood }))}
-                className={`cursor-pointer p-4 rounded-2xl border transition-all flex items-center gap-3 mb-4 ${
-                  routine.withFood ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200 hover:bg-stone-100'
-                }`}
-              >
-                <Utensils className="w-5 h-5 text-tide-600" />
-                <span className="flex-1 text-stone-900 text-sm">I take medication with food</span>
-                <div className={`w-6 h-6 rounded-full border flex items-center justify-center ${routine.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>
-                  {routine.withFood && <Check className="w-4 h-4 text-white" />}
+              {/* The variable-weekly-schedule question. */}
+              <div className="mt-8 pt-6 border-t border-stone-200">
+                <div className="flex items-start gap-3 mb-4">
+                  <CalendarDays className="w-5 h-5 text-apricot-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-stone-800">
+                      Do your wake-up, meal, or sleep times change depending on the day of the week?
+                    </p>
+                    <p className="text-xs text-stone-500 mt-1">Many people sleep in on weekends — we can shift reminders to match.</p>
+                  </div>
                 </div>
-              </div>
 
-              {routine.withFood && (
-                <div className="grid grid-cols-3 gap-3 mb-6 animate-in fade-in duration-300">
-                  {(['breakfast', 'lunch', 'dinner'] as const).map((meal) => (
-                    <TimeField
-                      key={meal}
-                      label={meal[0].toUpperCase() + meal.slice(1)}
-                      value={routine.mealTimes[meal]}
-                      onChange={(v) => setRoutine(p => ({ ...p, mealTimes: { ...p.mealTimes, [meal]: v } }))}
-                    />
+                <div className="grid grid-cols-3 gap-2">
+                  {([
+                    ['same', 'No, same every day'],
+                    ['weekday_weekend', 'Weekdays vs weekends'],
+                    ['per_day', 'It varies by day'],
+                  ] as [ScheduleType, string][]).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => setScheduleType(val)}
+                      className={`py-2.5 px-2 rounded-[14px] border text-xs font-medium transition-all ${
+                        routine.scheduleType === val ? 'bg-apricot-50 border-apricot-300 text-apricot-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
+                      }`}
+                    >
+                      {label}
+                    </button>
                   ))}
                 </div>
-              )}
 
-              <label className="block text-sm font-medium text-stone-700 mb-2">Any days your routine is different? (optional)</label>
-              <div className="flex gap-2">
-                {DAY_LABELS.map((lbl, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => toggleVariableDay(idx)}
-                    className={`w-10 h-10 rounded-full text-sm font-medium border transition-all ${
-                      routine.variableDays.includes(idx) ? 'bg-apricot-500 border-apricot-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
-                    }`}
-                  >
-                    {lbl}
-                  </button>
-                ))}
+                {routine.scheduleType === 'weekday_weekend' && routine.weekendRoutine && (
+                  <div className="mt-5 rounded-2xl border border-apricot-200 bg-apricot-50/40 p-5 animate-in fade-in duration-300">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Moon className="w-4 h-4 text-apricot-600" />
+                      <h3 className="text-sm font-semibold text-stone-800">Weekend routine (Sat–Sun)</h3>
+                    </div>
+                    <DayRoutineFields
+                      value={routine.weekendRoutine}
+                      onChange={(patch) => setRoutine(p => ({ ...p, weekendRoutine: { ...p.weekendRoutine!, ...patch } }))}
+                    />
+                  </div>
+                )}
+
+                {routine.scheduleType === 'per_day' && (
+                  <PerDayRoutineEditor routine={routine} setRoutine={setRoutine} />
+                )}
               </div>
-              <p className="text-xs text-stone-500 mt-2">We&apos;ll flag these so you can set day-specific times later.</p>
             </div>
           )}
 
@@ -341,7 +314,15 @@ export default function Onboarding() {
             <p className="mt-6 text-sm text-danger bg-danger-subtle border border-danger/20 rounded-[14px] px-3 py-2">{error}</p>
           )}
 
-          <div className="mt-10 flex justify-end">
+          <div className="mt-10 flex justify-between">
+            {step > 1 ? (
+              <button
+                onClick={() => { setError(null); setStep(step - 1); }}
+                className="px-5 py-4 rounded-[14px] font-medium text-stone-500 hover:text-stone-800 transition-colors"
+              >
+                Back
+              </button>
+            ) : <span />}
             <button
               onClick={handleNext}
               disabled={continueDisabled}
@@ -353,6 +334,175 @@ export default function Onboarding() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Per-medication requirements — progressive: food/spacing details only surface
+// as they become relevant, so a once-a-day med is a single tap.
+function MedRequirementsCard({
+  med, showName, index, onChange,
+}: {
+  med: MedDraft;
+  showName: boolean;
+  index: number;
+  onChange: (patch: Partial<MedDraft>) => void;
+}) {
+  return (
+    <div className={showName ? 'rounded-2xl border border-stone-200 p-5 bg-stone-50/50' : ''}>
+      {showName && (
+        <div className="flex items-center gap-2 mb-4">
+          <Pill className="w-4 h-4 text-apricot-600" />
+          <h2 className="font-semibold text-stone-900">{med.name || `Medication ${index + 1}`}</h2>
+        </div>
+      )}
+
+      <label className="block text-sm font-medium text-stone-700 mb-2">How many times a day?</label>
+      <div className="grid grid-cols-4 gap-2 mb-4">
+        {[1, 2, 3, 4].map((n) => (
+          <button
+            key={n}
+            onClick={() => onChange({ dosesPerDay: n, bedtimeOnly: n === 1 ? med.bedtimeOnly : false })}
+            className={`py-2.5 rounded-[14px] border text-sm font-medium transition-all ${
+              med.dosesPerDay === n ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'
+            }`}
+          >
+            {n === 4 ? '4+' : n}{n === 1 ? '×' : '×'}
+          </button>
+        ))}
+      </div>
+
+      <label className="block text-sm font-medium text-stone-700 mb-2">Any food rule?</label>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {FOOD_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => onChange({ foodRequirement: opt.value })}
+            className={`flex flex-col items-start gap-0.5 py-2.5 px-3 rounded-[14px] border text-left transition-all ${
+              med.foodRequirement === opt.value ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200 hover:bg-stone-100'
+            }`}
+          >
+            <span className={`text-xs font-medium ${med.foodRequirement === opt.value ? 'text-tide-700' : 'text-stone-700'}`}>{opt.label}</span>
+            <span className="text-[11px] text-stone-400">{opt.hint}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Bedtime-only is only meaningful for a once-daily med. */}
+      {med.dosesPerDay === 1 && (
+        <button
+          onClick={() => onChange({ bedtimeOnly: !med.bedtimeOnly })}
+          className={`mt-4 w-full p-3 rounded-xl border flex items-center gap-3 transition-all ${
+            med.bedtimeOnly ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200 hover:bg-stone-100'
+          }`}
+        >
+          <Moon className="w-4 h-4 text-tide-600" />
+          <span className="flex-1 text-sm text-stone-800 text-left">Only at bedtime</span>
+          <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${med.bedtimeOnly ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>
+            {med.bedtimeOnly && <Check className="w-3 h-3 text-white" />}
+          </div>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Wake / sleep / meals fields shared by the base routine, the weekend routine,
+// and each per-day routine.
+function DayRoutineFields({
+  value, onChange,
+}: {
+  value: DayRoutine;
+  onChange: (patch: Partial<DayRoutine>) => void;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <TimeField label="Wake up" value={value.wakeTime} onChange={(v) => onChange({ wakeTime: v })} />
+        <TimeField label="Go to sleep" value={value.sleepTime} onChange={(v) => onChange({ sleepTime: v })} />
+      </div>
+      <div className="flex items-center gap-2 mb-2 text-sm font-medium text-stone-700">
+        <Utensils className="w-4 h-4 text-tide-600" /> Meal times
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        {(['breakfast', 'lunch', 'dinner'] as const).map((meal) => (
+          <TimeField
+            key={meal}
+            label={meal[0].toUpperCase() + meal.slice(1)}
+            value={value.mealTimes[meal]}
+            onChange={(v) => onChange({ mealTimes: { ...value.mealTimes, [meal]: v } })}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+const DAY_FULL = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function PerDayRoutineEditor({
+  routine, setRoutine,
+}: {
+  routine: Routine;
+  setRoutine: React.Dispatch<React.SetStateAction<Routine>>;
+}) {
+  const [editing, setEditing] = useState<number | null>(null);
+  const customized = Object.keys(routine.dayRoutines).map(Number).sort();
+
+  const toggleDay = (d: number) =>
+    setRoutine(prev => {
+      const next = { ...prev.dayRoutines };
+      if (next[d]) {
+        delete next[d];
+        return { ...prev, dayRoutines: next };
+      }
+      next[d] = { wakeTime: prev.wakeTime, sleepTime: prev.sleepTime, withFood: prev.withFood, mealTimes: { ...prev.mealTimes } };
+      return { ...prev, dayRoutines: next };
+    });
+
+  return (
+    <div className="mt-5 rounded-2xl border border-apricot-200 bg-apricot-50/40 p-5 animate-in fade-in duration-300">
+      <p className="text-sm font-semibold text-stone-800 mb-1">Which days are different?</p>
+      <p className="text-xs text-stone-500 mb-3">Tap a day to give it its own routine. Untapped days use the routine above.</p>
+      <div className="flex gap-2 mb-4">
+        {DAY_LABELS.map((lbl, idx) => (
+          <button
+            key={idx}
+            onClick={() => toggleDay(idx)}
+            className={`w-10 h-10 rounded-full text-sm font-medium border transition-all ${
+              routine.dayRoutines[idx] ? 'bg-apricot-500 border-apricot-500 text-white' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'
+            }`}
+          >
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {customized.map((d) => (
+        <div key={d} className="rounded-xl border border-stone-200 bg-white p-4 mb-3">
+          <button
+            onClick={() => setEditing(editing === d ? null : d)}
+            className="w-full flex items-center justify-between text-sm font-medium text-stone-800"
+          >
+            <span>{DAY_FULL[d]} · {routine.dayRoutines[d].wakeTime}–{routine.dayRoutines[d].sleepTime}</span>
+            <span className="text-xs text-tide-600">{editing === d ? 'Close' : 'Edit'}</span>
+          </button>
+          {editing === d && (
+            <div className="mt-4">
+              <DayRoutineFields
+                value={routine.dayRoutines[d]}
+                onChange={(patch) => setRoutine(prev => ({
+                  ...prev,
+                  dayRoutines: { ...prev.dayRoutines, [d]: { ...prev.dayRoutines[d], ...patch } },
+                }))}
+              />
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

@@ -230,20 +230,6 @@ flowchart TB
 
 ---
 
-## 7. Use of AI
-
-### Where AI is (and isn't)
-
-| Surface | Technique | Model | Default | Status |
-|---|---|---|---|---|
-| **Pattern insight** | Rule-based statistical detector (Wed/Thu misses in the last 8 occurrences, ≥4 threshold), gated on a minimum log count | None (deterministic code) | On if `aiInsights` toggle | Built (`backend/app/api/v1/routes/insights.py`) |
-
-**The honest picture:** the only "AI"-branded feature that exists in code is the **pattern insight**, and it is a transparent, free, rule-based heuristic — no model, no external calls, and it cannot hallucinate. There is **no LLM and no external drug-data lookup** in the backend (no RxNorm/OpenFDA, no LiteLLM/OpenAI client). Dose times are set manually by the user during onboarding and resolved against their routine entirely by local code in `services/scheduling.py`.
-
-> A grounded, FDA-label-based timing suggestion (RxNorm + OpenFDA + an optional justification-free LLM) was part of the original product vision but is **not implemented** — see §10 / `product-skeleton.md`. The `schedule.source`/`reason`/`window`/`rxcui` fields exist in the data model to support it later, but nothing populates them today.
-
----
-
 ## 8. Key User Flows
 
 ### Diagram — Flow 1: Onboarding (Mermaid sequence)
@@ -338,7 +324,7 @@ This table reports only **what the repository actually shows** for each field �
 | **Aha Moment** | During onboarding the user names one or more medications and gives each its own time and days — the same time or different times — and the dashboard immediately shows a per-medication next-dose card, each resolved to their routine and timezone and independently loggable, instead of a single blank time field. |
 | **Inputs** | Email + password; user's name; **one to five medication names, each with its own window/exact time + days of week**; shared routine (wake/sleep, with-food + meal times, variable days); browser-detected IANA timezone; feature toggles; per-medication dose status (`taken`/`missed`); wellness check-in (physical 1–5, emotional 1–5, note ≤500 chars); per-medication schedule overrides (weekday, date-range shift/set/pause). |
 | **Outputs** | A resolved **per-medication** weekly schedule with next-due + 7-day upcoming + conflict warnings; adherence trend percentage across all medications; recent-history heatmap; a Wed/Thu pattern message with evidence; a caregiver summary (adherence %, missed count, avg physical/mood, recent activity, consecutive-miss alert); device connected/disconnected flag. |
-| **Use of AI** | Only the **pattern insight** — a deterministic, rule-based detector (Wed/Thu misses in the last 8 occurrences, ≥4 threshold), no model and no external calls. No LLM or external drug-data lookup exists in the backend. |
+| **Use of AI** | **None.** No AI is used anywhere in the product — no LLM, no model, and no external drug-data lookup in the backend. The pattern insight is a deterministic, rule-based detector (Wed/Thu misses in the last 8 occurrences, ≥4 threshold) running entirely in local code. |
 | **MVP Scope** | 1–5 medications per user, each with its own schedule. Fully implemented FastAPI backend (auth/profile/logs/schedule/stats/insights/caregiver/connections/reminders/device/health) + Next.js frontend (onboarding, dashboard, schedule settings, caregiver view, wellness modal). Caregiver is a same-account view. Device connects over BLE (Web Bluetooth → ESP32); backend stores only the last-known connected flag. |
 | **Constraints / Must Not Do** | Up to 5 medications per user, each independently scheduled; **no drug–drug interaction checking** (the free NLM RxNav interaction API was discontinued). API key never hardcoded/committed (lives in gitignored `.env`). One log per medication per day. Auth required on all endpoints except `/healthz`, `/auth/signup`, `/auth/login`. CORS restricted to configured origins. |
 
@@ -356,7 +342,6 @@ This table reports only **what the repository actually shows** for each field �
 - Multiple medications (1–5) are now supported and can be added/removed post-onboarding from Schedule settings — should the cap be raised, and should adherence/insights be reported per-medication rather than aggregate?
 - What is the UX for an unrecognized medication name beyond degrading to the manual picker?
 - Is there any token revocation/refresh story? (`/auth/logout` is a no-op; JWTs simply expire after 7 days.)
-- The pattern insight is hard-coded to **Wednesday/Thursday** misses — is that intended as the only pattern, or a placeholder for a more general detector?
 
 ---
 

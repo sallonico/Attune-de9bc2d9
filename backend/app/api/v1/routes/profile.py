@@ -11,9 +11,12 @@ from app.core.deps import get_current_user, get_database
 from app.services.scheduling import (
     ALL_DAYS,
     DEFAULT_TZ,
+    FOOD_REQUIREMENTS,
+    apply_generated_times,
     default_schedule,
     derive_profile_mirrors,
     ensure_medications,
+    ensure_requirements,
     ensure_routine,
     ensure_schedule,
 )
@@ -49,21 +52,51 @@ class Features(BaseModel):
     caregiverAccess: bool = False
 
 
+class Requirements(BaseModel):
+    """Per-medication dosing requirements that drive time generation."""
+    dosesPerDay: int = Field(default=1, ge=1, le=8)
+    foodRequirement: str = "none"
+    bedtimeOnly: bool = False
+    minSpacingMinutes: int | None = Field(default=None, ge=0, le=1440)
+
+    @field_validator("foodRequirement")
+    @classmethod
+    def _food(cls, v: str) -> str:
+        if v not in FOOD_REQUIREMENTS:
+            raise ValueError(f"foodRequirement must be one of {FOOD_REQUIREMENTS}")
+        return v
+
+
 class MedicationInput(BaseModel):
-    """One medication and its own default schedule. Two medications may share a
-    time or sit at completely different times — each carries its own."""
+    """One medication, its requirements, and its own schedule. Two medications may
+    share a time or sit at completely different times — each carries its own.
+
+    ``times`` (multi-dose) takes precedence over the single ``time`` if provided.
+    A ``source`` of ``auto`` means dose times are generated from ``requirements``
+    and the user's routine rather than entered by hand."""
     name: str = Field(min_length=1, max_length=120)
-    time: str
+    time: str = "08:00"
+    times: list[str] | None = None
+    requirements: Requirements = Field(default_factory=Requirements)
     daysOfWeek: list[int] = Field(default_factory=lambda: list(ALL_DAYS), min_length=1)
     window: str | None = None
     reason: str | None = Field(default=None, max_length=400)
-    source: Literal["ai", "user"] = "user"
+    source: Literal["ai", "user", "auto"] = "user"
     rxcui: str | None = None
 
     @field_validator("time")
     @classmethod
     def _t(cls, v: str) -> str:
         return _validate_hhmm(v)
+
+    @field_validator("times")
+    @classmethod
+    def _ts(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        for t in v:
+            _validate_hhmm(t)
+        return sorted(dict.fromkeys(v))
 
     @field_validator("daysOfWeek")
     @classmethod
@@ -104,16 +137,25 @@ class ProfilePatch(BaseModel):
         return _validate_tz(v) if v is not None else v
 
 
-def _build_medications(items: list[MedicationInput]) -> list[dict]:
+def _build_medications(items: list[MedicationInput], routine: dict) -> list[dict]:
     """Turn the onboarding payload into stored medication docs, each with a
-    fresh id and a complete schedule."""
+    fresh id, its requirements, and a complete schedule. For ``auto`` medications
+    the dose times are generated from the requirements + the user's routine."""
     meds: list[dict] = []
     for m in items:
         sched = default_schedule(
-            time=m.time, window=m.window, reason=m.reason, source=m.source, rxcui=m.rxcui
+            time=m.time, times=m.times, window=m.window, reason=m.reason,
+            source=m.source, rxcui=m.rxcui,
         )
         sched["daysOfWeek"] = m.daysOfWeek
-        meds.append({"id": uuid.uuid4().hex, "name": m.name, "schedule": sched})
+        med = {
+            "id": uuid.uuid4().hex,
+            "name": m.name,
+            "requirements": ensure_requirements(m.requirements.model_dump()),
+            "schedule": sched,
+        }
+        apply_generated_times(med, routine)  # no-op unless source == 'auto'
+        meds.append(med)
     return meds
 
 
@@ -141,7 +183,9 @@ async def upsert_profile(
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     now = datetime.now(timezone.utc)
-    meds = _build_medications(body.medications)
+    existing = await db.profiles.find_one({"user_id": current_user["_id"]})
+    routine = ensure_routine(existing)  # use any saved routine; else defaults
+    meds = _build_medications(body.medications, routine)
     await db.profiles.update_one(
         {"user_id": current_user["_id"]},
         {

@@ -32,14 +32,34 @@ export default function AuthGate() {
     }
   };
 
+  const isSignup = mode === "signup";
+
   return (
-    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-6 relative overflow-hidden">
-      <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-tide-200/30 rounded-full blur-[140px]" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-apricot-200/25 rounded-full blur-[140px]" />
+    <div
+      className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden"
+      style={
+        isSignup
+          ? { background: "linear-gradient(168deg,#3E7FC2 0%,#2E63A8 50%,#21477E 100%)" }
+          : { background: "#FAF8F4" }
+      }
+    >
+      {isSignup ? (
+        <CapsuleField />
+      ) : (
+        <>
+          <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-tide-200/30 rounded-full blur-[140px]" />
+          <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-apricot-200/25 rounded-full blur-[140px]" />
+        </>
+      )}
 
       <div className="w-full max-w-md relative z-10">
-        <div className="flex justify-center mb-8">
-          <AttuneLogo />
+        <div className="flex flex-col items-center gap-4 mb-8">
+          <AttuneLogo onDark={isSignup} />
+          {isSignup && (
+            <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/15 border border-white/25 font-mono text-[10px] tracking-[0.16em] uppercase text-white backdrop-blur">
+              Welcome to attune
+            </span>
+          )}
         </div>
 
         <div className="bg-white border border-stone-200 rounded-3xl p-8 shadow-[var(--shadow-lg)]">
@@ -144,6 +164,43 @@ export default function AuthGate() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Decorative drifting capsules behind the sign-up card — the showcase's
+ * onboarding-hero motif, re-tinted for the blue background. Purely cosmetic.
+ */
+function CapsuleField() {
+  // [left%, top%, width, height, rotate(deg), tintHalf]
+  const pills: [string, string, number, number, number, string][] = [
+    ["6%", "14%", 132, 46, -22, "#BFE0FF"],
+    ["72%", "10%", 150, 50, 17, "#E4F1FF"],
+    ["18%", "70%", 122, 44, 33, "#BFE0FF"],
+    ["68%", "64%", 128, 46, -14, "#FCE6D6"],
+    ["44%", "26%", 112, 40, 9, "#E4F1FF"],
+  ];
+  return (
+    <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
+      {pills.map(([left, top, w, h, rot, tint], i) => (
+        <div
+          key={i}
+          className="absolute flex overflow-hidden rounded-full border border-white/30"
+          style={{
+            left,
+            top,
+            width: w,
+            height: h,
+            transform: `rotate(${rot}deg)`,
+            boxShadow: "0 14px 26px -8px rgba(15,40,80,.45)",
+          }}
+        >
+          <div className="flex-1 bg-white" />
+          <div className="w-[2px] bg-black/10" />
+          <div className="flex-1" style={{ background: tint }} />
+        </div>
+      ))}
     </div>
   );
 }

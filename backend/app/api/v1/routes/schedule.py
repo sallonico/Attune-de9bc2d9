@@ -9,9 +9,13 @@ from pydantic import BaseModel, Field, field_validator
 from app.core.deps import get_current_user, get_database
 from app.services.scheduling import (
     ALL_DAYS,
+    FOOD_REQUIREMENTS,
+    SCHEDULE_TYPES,
+    apply_generated_times,
     default_schedule,
     derive_profile_mirrors,
     ensure_medications,
+    ensure_requirements,
     ensure_routine,
     find_medication,
     medications_view,
@@ -92,19 +96,44 @@ async def get_schedule(
 # --------------------------------------------------------------------------- #
 # Add / remove a medication
 # --------------------------------------------------------------------------- #
+class Requirements(BaseModel):
+    dosesPerDay: int = Field(default=1, ge=1, le=8)
+    foodRequirement: str = "none"
+    bedtimeOnly: bool = False
+    minSpacingMinutes: int | None = Field(default=None, ge=0, le=1440)
+
+    @field_validator("foodRequirement")
+    @classmethod
+    def _food(cls, v: str) -> str:
+        if v not in FOOD_REQUIREMENTS:
+            raise ValueError(f"foodRequirement must be one of {FOOD_REQUIREMENTS}")
+        return v
+
+
 class AddMedicationBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    time: str
+    time: str = "08:00"
+    times: list[str] | None = None
+    requirements: Requirements = Field(default_factory=Requirements)
     daysOfWeek: list[int] = Field(default_factory=lambda: list(ALL_DAYS), min_length=1)
     window: str | None = None
     reason: str | None = Field(default=None, max_length=400)
-    source: Literal["ai", "user"] = "user"
+    source: Literal["ai", "user", "auto"] = "user"
     rxcui: str | None = None
 
     @field_validator("time")
     @classmethod
     def _t(cls, v: str) -> str:
         return _validate_hhmm(v)
+
+    @field_validator("times")
+    @classmethod
+    def _ts(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        for t in v:
+            _validate_hhmm(t)
+        return sorted(dict.fromkeys(v))
 
     @field_validator("daysOfWeek")
     @classmethod
@@ -133,11 +162,18 @@ async def add_medication(
     if len(meds) >= 10:
         raise HTTPException(status_code=422, detail="medication_limit_reached")
     sched = default_schedule(
-        time=body.time, window=body.window, reason=body.reason,
+        time=body.time, times=body.times, window=body.window, reason=body.reason,
         source=body.source, rxcui=body.rxcui,
     )
     sched["daysOfWeek"] = body.daysOfWeek
-    meds.append({"id": uuid.uuid4().hex, "name": body.name, "schedule": sched})
+    med = {
+        "id": uuid.uuid4().hex,
+        "name": body.name,
+        "requirements": ensure_requirements(body.requirements.model_dump()),
+        "schedule": sched,
+    }
+    apply_generated_times(med, ensure_routine(profile))  # no-op unless source == 'auto'
+    meds.append(med)
     await _save_meds(db, current_user["_id"], meds)
     return _view(await _require_profile(db, current_user))
 
@@ -170,12 +206,12 @@ async def remove_medication(
 # NOTE: declared before the dynamic ``PUT /{med_id}`` so "/schedule/routine"
 # isn't captured as a medication id.
 # --------------------------------------------------------------------------- #
-class RoutineBody(BaseModel):
+class DayRoutineBody(BaseModel):
+    """A wake/sleep/meals routine for one day-type (weekend, or a specific day)."""
     wakeTime: str
     sleepTime: str
     withFood: bool = False
     mealTimes: dict[str, str] = Field(default_factory=dict)
-    variableDays: list[int] = Field(default_factory=list)
 
     @field_validator("wakeTime", "sleepTime")
     @classmethod
@@ -185,7 +221,32 @@ class RoutineBody(BaseModel):
     @field_validator("mealTimes")
     @classmethod
     def _meals(cls, v: dict[str, str]) -> dict[str, str]:
-        for key, val in v.items():
+        for val in v.values():
+            _validate_hhmm(val)
+        return v
+
+
+class RoutineBody(BaseModel):
+    wakeTime: str
+    sleepTime: str
+    withFood: bool = False
+    mealTimes: dict[str, str] = Field(default_factory=dict)
+    variableDays: list[int] = Field(default_factory=list)
+    # Variable weekly schedule. "same" uses one routine for every day;
+    # "weekday_weekend" adds a weekend routine; "per_day" adds per-weekday ones.
+    scheduleType: Literal["same", "weekday_weekend", "per_day"] = "same"
+    weekendRoutine: DayRoutineBody | None = None
+    dayRoutines: dict[str, DayRoutineBody] = Field(default_factory=dict)
+
+    @field_validator("wakeTime", "sleepTime")
+    @classmethod
+    def _t(cls, v: str) -> str:
+        return _validate_hhmm(v)
+
+    @field_validator("mealTimes")
+    @classmethod
+    def _meals(cls, v: dict[str, str]) -> dict[str, str]:
+        for val in v.values():
             _validate_hhmm(val)
         return v
 
@@ -195,6 +256,14 @@ class RoutineBody(BaseModel):
         if any(d < 0 or d > 6 for d in v):
             raise ValueError("variableDays entries must be 0..6")
         return sorted(set(v))
+
+    @field_validator("dayRoutines")
+    @classmethod
+    def _dr(cls, v: dict[str, DayRoutineBody]) -> dict[str, DayRoutineBody]:
+        for k in v:
+            if not (k.isdigit() and 0 <= int(k) <= 6):
+                raise ValueError("dayRoutines keys must be weekdays '0'..'6'")
+        return v
 
 
 @router.put("/routine")
@@ -210,13 +279,18 @@ async def put_routine(
         "withFood": body.withFood,
         "mealTimes": body.mealTimes,
         "variableDays": body.variableDays,
+        "scheduleType": body.scheduleType,
+        "weekendRoutine": body.weekendRoutine.model_dump() if body.weekendRoutine else None,
+        "dayRoutines": {k: v.model_dump() for k, v in body.dayRoutines.items()},
     }
-    # Re-derive each AI-sourced dose time against the new routine (no-op for
-    # medications whose time was set manually).
+    # Re-derive dose times against the new routine: requirements-driven ('auto')
+    # meds regenerate from the routine; legacy AI single-dose meds re-window.
+    # Manual ('user') times are never touched.
     norm_routine = ensure_routine({"routine": routine})
     meds = ensure_medications(profile)
     for med in meds:
         med["schedule"] = recompute_ai_time(med["schedule"], norm_routine)
+        apply_generated_times(med, norm_routine)
     await db.profiles.update_one(
         {"user_id": current_user["_id"]},
         {"$set": {
@@ -234,17 +308,28 @@ async def put_routine(
 # --------------------------------------------------------------------------- #
 class ScheduleBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
-    time: str
+    time: str = "08:00"
+    times: list[str] | None = None
+    requirements: Requirements | None = None
     daysOfWeek: list[int] = Field(min_length=1)
     window: str | None = None
     reason: str | None = Field(default=None, max_length=400)
-    source: Literal["ai", "user"] = "user"
+    source: Literal["ai", "user", "auto"] = "user"
     rxcui: str | None = None
 
     @field_validator("time")
     @classmethod
     def _t(cls, v: str) -> str:
         return _validate_hhmm(v)
+
+    @field_validator("times")
+    @classmethod
+    def _ts(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        for t in v:
+            _validate_hhmm(t)
+        return sorted(dict.fromkeys(v))
 
     @field_validator("daysOfWeek")
     @classmethod
@@ -274,14 +359,21 @@ async def put_schedule(
     med = _require_med(meds, med_id)
     if body.name is not None:
         med["name"] = body.name
+    if body.requirements is not None:
+        med["requirements"] = ensure_requirements(body.requirements.model_dump())
+    times = body.times if body.times is not None else [body.time]
     med["schedule"].update({
-        "time": body.time,
+        "time": times[0],
+        "times": times,
         "daysOfWeek": body.daysOfWeek,
         "window": body.window,
         "reason": body.reason,
         "source": body.source,
         "rxcui": body.rxcui if body.rxcui is not None else med["schedule"].get("rxcui"),
     })
+    # If the med stays requirements-driven, (re)generate its times; manual edits
+    # (source 'user') keep exactly what was sent.
+    apply_generated_times(med, ensure_routine(profile))
     await _save_meds(db, current_user["_id"], meds)
     return _view(await _require_profile(db, current_user))
 
@@ -309,7 +401,7 @@ async def add_day_override(
     profile = await _require_profile(db, current_user)
     meds = ensure_medications(profile)
     med = _require_med(meds, med_id)
-    med["schedule"].setdefault("dayOverrides", {})[str(body.weekday)] = body.time
+    med["schedule"].setdefault("dayOverrides", {})[str(body.weekday)] = [body.time]
     await _save_meds(db, current_user["_id"], meds)
     return _view(await _require_profile(db, current_user))
 

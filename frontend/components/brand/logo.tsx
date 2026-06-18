@@ -43,18 +43,29 @@ export function AttuneMark({
  */
 export function AttuneLogo({
   showWordmark = true,
+  onDark = false,
   className,
 }: {
   showWordmark?: boolean;
+  /** Render the wordmark in white for placement on dark/coloured backgrounds. */
+  onDark?: boolean;
   className?: string;
 }) {
   return (
     <div className={`flex items-center gap-2.5 ${className ?? ""}`}>
-      <span className="flex h-9 w-9 items-center justify-center rounded-2xl bg-stone-900 shadow-[var(--shadow-sm)]">
+      <span
+        className={`flex h-9 w-9 items-center justify-center rounded-2xl shadow-[var(--shadow-sm)] ${
+          onDark ? "bg-white/15 ring-1 ring-white/25 backdrop-blur" : "bg-stone-900"
+        }`}
+      >
         <AttuneMark size={26} />
       </span>
       {showWordmark && (
-        <span className="font-display text-xl font-bold lowercase tracking-tight text-stone-900">
+        <span
+          className={`font-display text-xl font-bold lowercase tracking-tight ${
+            onDark ? "text-white" : "text-stone-900"
+          }`}
+        >
           attune
         </span>
       )}

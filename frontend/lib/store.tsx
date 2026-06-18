@@ -8,6 +8,17 @@ export type LogStatus = 'taken' | 'missed';
 export type TimeWindow = 'morning' | 'afternoon' | 'evening' | 'night';
 export type UserRole = 'patient' | 'caregiver';
 export type DeviceStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+export type ScheduleSource = 'ai' | 'user' | 'auto';
+export type FoodRequirement = 'none' | 'with_food' | 'without_food' | 'before_meals' | 'after_meals';
+export type ScheduleType = 'same' | 'weekday_weekend' | 'per_day';
+
+/** Per-medication dosing requirements that drive reminder-time generation. */
+export interface Requirements {
+  dosesPerDay: number;
+  foodRequirement: FoodRequirement;
+  bedtimeOnly: boolean;
+  minSpacingMinutes: number | null;
+}
 
 /** The device's IANA timezone (e.g. "America/New_York"), or "UTC" if unavailable. */
 export function browserTimeZone(): string {
@@ -16,6 +27,12 @@ export function browserTimeZone(): string {
   } catch {
     return 'UTC';
   }
+}
+
+/** True if two instants fall on the same calendar day in the given timezone. */
+function sameDayInTz(a: Date, b: Date, tz: string): boolean {
+  const fmt = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: tz });
+  return fmt(a) === fmt(b);
 }
 
 export interface CheckIn {
@@ -43,27 +60,37 @@ export interface DateOverride {
 }
 
 export interface Schedule {
-  time: string;             // HH:mm — default daily dose time
+  time: string;             // HH:mm — first dose (legacy mirror of times[0])
+  times: string[];          // HH:mm — all daily dose times (sorted)
   daysOfWeek: number[];     // Mon=0 .. Sun=6
   window: TimeWindow | null;
   reason: string | null;
-  source: 'ai' | 'user';
+  source: ScheduleSource;
   rxcui: string | null;
-  dayOverrides: Record<string, string>;   // { "5": "10:00" }
+  dayOverrides: Record<string, string[]>;  // { "5": ["10:00"] }
   dateOverrides: DateOverride[];
 }
 
-export interface Routine {
+/** A wake/sleep/meals routine for one day-type (base, weekend, or a weekday). */
+export interface DayRoutine {
   wakeTime: string;
   sleepTime: string;
   withFood: boolean;
   mealTimes: Record<string, string>;       // { breakfast, lunch, dinner }
+}
+
+export interface Routine extends DayRoutine {
   variableDays: number[];
+  // Variable weekly schedule. 'same' uses one routine for every day.
+  scheduleType: ScheduleType;
+  weekendRoutine: DayRoutine | null;        // used when scheduleType === 'weekday_weekend'
+  dayRoutines: Record<string, DayRoutine>;  // { "5": {...} } when scheduleType === 'per_day'
 }
 
 export interface UpcomingDose {
   date: string;             // YYYY-MM-DD
-  time: string | null;      // null = no dose / skipped
+  times: string[];          // all dose times that day ([] = skipped)
+  time: string | null;      // legacy: first time, null if skipped
   skipped: boolean;
 }
 
@@ -72,17 +99,20 @@ export interface Conflict {
   message: string;
 }
 
-/** A medication and its own schedule. Two meds can share a time or differ. */
+/** A medication, its requirements, and its own schedule. Two meds can share a
+ *  time or differ; each carries its own requirements + schedule. */
 export interface Medication {
   id: string;
   name: string;
+  requirements: Requirements;
   schedule: Schedule;
 }
 
-/** One medication's resolved view: schedule + next-due/upcoming/conflicts. */
+/** One medication's resolved view: requirements + schedule + next-due/upcoming/conflicts. */
 export interface MedicationView {
   id: string;
   name: string;
+  requirements: Requirements;
   schedule: Schedule;
   nextDue: string | null;   // ISO datetime (carries the user's tz offset)
   upcoming: UpcomingDose[];
@@ -95,14 +125,18 @@ export interface ScheduleView {
   timezone: string;         // IANA name (e.g. "America/New_York") doses are anchored to
 }
 
-/** A medication + schedule as sent to the server (onboarding / add). */
+/** A medication + requirements + schedule as sent to the server (onboarding / add).
+ *  When `source` is 'auto', dose times are generated server-side from
+ *  `requirements` + routine, so `time`/`times` can be omitted. */
 export interface MedicationInput {
   name: string;
-  time: string;             // HH:mm
+  time?: string;            // HH:mm (manual single dose)
+  times?: string[];         // HH:mm (manual multi-dose)
+  requirements?: Requirements;
   daysOfWeek: number[];
   window: TimeWindow | null;
   reason?: string | null;
-  source?: 'ai' | 'user';
+  source?: ScheduleSource;
   rxcui?: string | null;
 }
 
@@ -182,7 +216,7 @@ interface AppState {
 
   // Scheduling actions (per medication)
   refreshSchedule: () => Promise<void>;
-  saveSchedule: (medicationId: string, body: { name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: 'ai' | 'user'; rxcui: string | null }) => Promise<void>;
+  saveSchedule: (medicationId: string, body: { name?: string; time?: string; times?: string[]; requirements?: Requirements; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: ScheduleSource; rxcui: string | null }) => Promise<void>;
   saveRoutine: (routine: Routine) => Promise<void>;
   addMedication: (body: MedicationInput) => Promise<void>;
   removeMedication: (medicationId: string) => Promise<void>;
@@ -238,6 +272,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const bleConnection = useRef<BleConnection | null>(null);
   const [showWellnessModal, setShowWellnessModal] = useState(false);
   const [pendingLogId, setPendingLogId] = useState<string | null>(null);
+
+  // Holds the latest "device button was pressed" action. The BLE message
+  // callback is bound once at connect time, but the action it runs needs the
+  // CURRENT schedule/logs — so we keep it in a ref refreshed on every render
+  // (see the effect after logDose) instead of capturing stale state.
+  const handleDevicePressRef = useRef<() => void>(() => {});
 
   // Records the last-known connected/disconnected state on the backend so it
   // survives a refresh and can be shared (e.g. caregiver view). Best-effort:
@@ -420,6 +460,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // A press of the device's physical "taken" button logs the next medication
+  // that hasn't been recorded today — the same outcome as tapping "Mark as
+  // taken" on the soonest-due card. Refreshed each render so the BLE callback
+  // always logs against the current schedule/logs.
+  handleDevicePressRef.current = () => {
+    const meds = scheduleView?.medications ?? [];
+    if (meds.length === 0) return;
+    const tz = scheduleView?.timezone || browserTimeZone();
+    const now = new Date();
+    // Medications come ordered by next dose; take the first with no log today.
+    const target = meds.find(
+      m => !logs.some(l => l.medicationId === m.id && sameDayInTz(l.timestamp, now, tz)),
+    );
+    if (target) void logDose(target.id, 'taken');
+  };
+
   const remindMeLater = async (medicationId: string) => {
     const res = await apiFetch<{ medicationId: string; remindMeCount: number; autoMissed: boolean }>(
       '/reminders/remind-later',
@@ -458,7 +514,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const connectDevice = useCallback(async () => {
     setDeviceStatus('connecting');
     try {
-      const conn = await connectToDevice(handleBleDisconnect);
+      const conn = await connectToDevice(handleBleDisconnect, (msg) => {
+        // The device sends heartbeats ("ok") and button presses. Only the
+        // "taken" button is wired end-to-end; "snooze" (remind me later) is
+        // received but intentionally ignored until that flow is built.
+        if (msg.startsWith('taken')) {
+          handleDevicePressRef.current();
+        }
+      });
       bleConnection.current = conn;
       setDeviceStatus('connected');
       await persistDeviceState(true);
@@ -484,14 +547,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setScheduleView(view);
     setUserProfile(prev => prev ? {
       ...prev,
-      medications: view.medications.map(m => ({ id: m.id, name: m.name, schedule: m.schedule })),
+      medications: view.medications.map(m => ({ id: m.id, name: m.name, requirements: m.requirements, schedule: m.schedule })),
       medication: view.medications.map(m => m.name).join(', '),
     } : prev);
   };
 
   const saveSchedule = async (
     medicationId: string,
-    body: { name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: 'ai' | 'user'; rxcui: string | null },
+    body: { name?: string; time?: string; times?: string[]; requirements?: Requirements; daysOfWeek: number[]; window: TimeWindow | null; reason: string | null; source: ScheduleSource; rxcui: string | null },
   ) => {
     const view = await apiFetch<ScheduleView>(`/schedule/${medicationId}`, { method: 'PUT', body: JSON.stringify(body) });
     applyView(view);

@@ -1,57 +1,76 @@
 // Attune ESP32 BLE firmware
 // ---------------------------
-// Turns the ESP32 into a Bluetooth Low Energy (BLE) device that the Attune
-// web app can find and connect to via the browser's Web Bluetooth API.
+// Makes the ESP32 a Bluetooth device the Attune web app connects to. When you
+// press the button, it tells the web app "taken" and the app logs today's dose
+// (just like tapping "Mark as taken" on screen).
 //
-// Toolchain (beginner setup):
-//   1. Install the Arduino IDE.
-//   2. Boards Manager -> install "esp32 by Espressif Systems" (bundles BLEDevice).
-//   3. Select your board (e.g. "ESP32 Dev Module") and the correct serial port.
-//   4. Upload this sketch, then open the Serial Monitor at 115200 baud.
+// Wiring:
+//   * Button: one leg to GPIO 4, the other leg to GND. (We use the chip's
+//     built-in pull-up, so the pin reads HIGH normally and LOW when pressed.)
 //
-// Verify with a generic BLE scanner app (e.g. nRF Connect) BEFORE using the web
-// app: you should see "Attune Device" advertise and be able to read the status
-// characteristic. That isolates hardware issues from browser issues.
+// Upload steps:
+//   1. Arduino IDE -> Boards Manager -> install "esp32 by Espressif Systems".
+//   2. Pick your board (e.g. "ESP32 Dev Module") and the right serial port.
+//   3. Upload, then open Serial Monitor at 115200 baud to watch button presses.
+//
+// Serial Monitor testing (no button needed):
+//   * Type "1" and press Enter to simulate a button press (sends "taken").
+//   * Type "0" and press Enter to simulate releasing the button.
+//   Make sure the Serial Monitor line ending is set to "Newline" (or similar).
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-// These UUIDs MUST match the ones in frontend/lib/bluetooth.ts.
+// These IDs MUST match frontend/lib/bluetooth.ts so the website can find us.
 #define SERVICE_UUID     "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define STATUS_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// Onboard LED, used only as a visual "connected" indicator. Not every ESP32
-// board defines LED_BUILTIN, so we pin it explicitly. GPIO 2 is the onboard
-// LED on most ESP32 dev boards; change it if yours differs (or has no LED).
-#define LED_PIN 2
+// Pin for the button.
+const int buttonPin = 4;
 
+// Variables to store the button state and the previous reading.
+int buttonState = HIGH;
+int lastButtonState = HIGH;
+
+// BLE objects, and whether the website is currently connected.
 BLECharacteristic* statusChar = nullptr;
 bool deviceConnected = false;
 
-// Server callbacks fire when a central (the browser) connects or disconnects.
+// Fires when the website connects or disconnects over Bluetooth.
 class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     deviceConnected = true;
-    digitalWrite(LED_PIN, HIGH);              // LED on while connected
-    Serial.println("Central connected");
+    Serial.println("Website connected");
   }
-
   void onDisconnect(BLEServer* server) override {
     deviceConnected = false;
-    digitalWrite(LED_PIN, LOW);
-    Serial.println("Central disconnected; re-advertising");
-    BLEDevice::startAdvertising();            // allow reconnect without reflash
+    Serial.println("Website disconnected; advertising again");
+    BLEDevice::startAdvertising();   // let the website reconnect
   }
 };
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+// Sends "taken" to the website (or explains why it can't yet).
+void sendTaken() {
+  Serial.println("Sending \"taken\"");
+  if (deviceConnected) {
+    statusChar->setValue("taken");
+    statusChar->notify();          // this is what the website reacts to
+  } else {
+    Serial.println("(no website connected yet)");
+  }
+}
 
-  BLEDevice::init("Attune Device");           // name shown in the browser picker
+void setup() {
+  // Start the serial communication.
+  Serial.begin(115200);
+
+  // Set the button pin as input with internal pull-up resistor.
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  // --- Set up Bluetooth so the website can connect ---
+  BLEDevice::init("Attune Device");
 
   BLEServer* server = BLEDevice::createServer();
   server->setCallbacks(new ServerCallbacks());
@@ -60,25 +79,47 @@ void setup() {
   statusChar = service->createCharacteristic(
       STATUS_CHAR_UUID,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-  statusChar->addDescriptor(new BLE2902());   // required so notifications work
+  statusChar->addDescriptor(new BLE2902());   // needed for notifications
   statusChar->setValue("ok");
   service->start();
 
   BLEAdvertising* adv = BLEDevice::getAdvertising();
-  adv->addServiceUUID(SERVICE_UUID);          // lets the browser filter for us
+  adv->addServiceUUID(SERVICE_UUID);
   adv->setScanResponse(true);
   BLEDevice::startAdvertising();
 
   Serial.println("Advertising as \"Attune Device\"");
+  Serial.println("Type 1 (press) or 0 (release) in Serial Monitor to test.");
 }
 
 void loop() {
-  // While connected, push a small heartbeat so the link stays observably live.
-  // For this build it just proves the connection; later this is where real
-  // device data (button presses, battery level, etc.) would be sent.
-  if (deviceConnected) {
-    statusChar->setValue("ok");
-    statusChar->notify();
+  // --- Serial Monitor testing: type 1 to simulate a press, 0 to release ---
+  if (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == '1') {
+      Serial.println("Serial: simulating button press");
+      sendTaken();
+    } else if (c == '0') {
+      Serial.println("Serial: simulating button release");
+    }
+    // Ignore anything else (e.g. newline characters).
   }
-  delay(2000);
+
+  // Read the button. With INPUT_PULLUP: HIGH = not pressed, LOW = pressed.
+  buttonState = digitalRead(buttonPin);
+
+  // TEMPORARY test line: prints 1 normally and 0 when the button is pressed.
+  // Remove this once you've confirmed the button works.
+  Serial.println(buttonState);
+
+  // Only act once per press: when it just went from not-pressed to pressed.
+  if (buttonState == LOW && lastButtonState == HIGH) {
+    Serial.println("Button pressed -> sending \"taken\"");
+    sendTaken();
+  }
+
+  // Remember this reading for next time.
+  lastButtonState = buttonState;
+
+  delay(100);   // small delay to debounce the button
 }

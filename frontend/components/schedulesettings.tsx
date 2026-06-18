@@ -1,10 +1,14 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useAppStore, TimeWindow, MedicationInput, browserTimeZone } from '../lib/store';
 import {
-  Clock, CalendarDays, AlertTriangle, Plus, Trash2, Utensils, Sun,
-  Sunrise, Sunset, Moon, CalendarOff, Pause, ArrowRightLeft, Check, Globe, Pill,
+  useAppStore, TimeWindow, MedicationInput, Requirements, FoodRequirement,
+  DayRoutine, ScheduleType, browserTimeZone,
+} from '../lib/store';
+import {
+  Clock, CalendarDays, AlertTriangle, Plus, Trash2, Utensils,
+  Moon, CalendarOff, Pause, ArrowRightLeft, Check, Globe, Pill,
+  Sparkles, Hand,
 } from 'lucide-react';
 
 // A short, friendly list; the user's current and device zones are always added.
@@ -18,11 +22,13 @@ const COMMON_TIMEZONES = [
 
 const DAY_FULL = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // index 0=Mon..6=Sun
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
-const WINDOW_ICON: Record<TimeWindow, React.ReactNode> = {
-  morning: <Sunrise className="w-4 h-4" />,
-  afternoon: <Sun className="w-4 h-4" />,
-  evening: <Sunset className="w-4 h-4" />,
-  night: <Moon className="w-4 h-4" />,
+
+const FOOD_LABEL: Record<FoodRequirement, string> = {
+  none: 'No food rule',
+  with_food: 'With food',
+  without_food: 'On empty stomach',
+  before_meals: 'Before meals',
+  after_meals: 'After meals',
 };
 
 function fmtTime(hhmm: string | null): string {
@@ -32,6 +38,8 @@ function fmtTime(hhmm: string | null): string {
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
+
+const fmtTimes = (times: string[]) => (times.length ? times.map(fmtTime).join(' · ') : '—');
 
 const card = 'bg-white border border-stone-200 rounded-3xl p-6 shadow-[var(--shadow-sm)]';
 const inputCls = 'bg-stone-50 border border-stone-200 rounded-[14px] px-3 py-2 text-stone-900 text-sm focus:outline-none focus:ring-2 focus:ring-tide-500/40 focus:border-tide-400 transition-all';
@@ -92,7 +100,7 @@ export default function ScheduleSettings() {
             >
               <Pill className="w-4 h-4" />
               {m.name}
-              <span className={`text-xs ${m.id === med.id ? 'text-white/80' : 'text-stone-400'}`}>{fmtTime(m.schedule.time)}</span>
+              <span className={`text-xs ${m.id === med.id ? 'text-white/80' : 'text-stone-400'}`}>{fmtTimes(m.schedule.times)}</span>
             </button>
           ))}
         </div>
@@ -206,9 +214,12 @@ function TimezoneCard({ timezone, onSave }: { timezone: string; onSave: (tz: str
 
 // --------------------------------------------------------------------------- //
 type ScheduleSaveBody = {
-  name?: string; time: string; daysOfWeek: number[]; window: TimeWindow | null;
-  reason: string | null; source: 'ai' | 'user'; rxcui: string | null;
+  name?: string; time?: string; times?: string[]; requirements?: Requirements;
+  daysOfWeek: number[]; window: TimeWindow | null;
+  reason: string | null; source: 'ai' | 'user' | 'auto'; rxcui: string | null;
 };
+
+const FOOD_VALUES: FoodRequirement[] = ['none', 'with_food', 'without_food', 'before_meals', 'after_meals'];
 
 function MedicationScheduleCard({
   med, canRemove, onSave, onRemove,
@@ -218,22 +229,43 @@ function MedicationScheduleCard({
   onSave: (b: ScheduleSaveBody) => Promise<void>;
   onRemove: () => Promise<void>;
 }) {
-  const { schedule } = med;
+  const { schedule, requirements } = med;
   const [name, setName] = useState(med.name);
-  const [time, setTime] = useState(schedule.time);
   const [days, setDays] = useState<number[]>(schedule.daysOfWeek);
-  const [source, setSource] = useState<'ai' | 'user'>(schedule.source);
+  // 'auto' = times generated from requirements + routine; 'user' = hand-picked.
+  const [mode, setMode] = useState<'auto' | 'user'>(schedule.source === 'auto' ? 'auto' : 'user');
+  const [req, setReq] = useState<Requirements>(requirements);
+  const [times, setTimes] = useState<string[]>(schedule.times);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [removing, setRemoving] = useState(false);
 
   const toggle = (d: number) => setDays(p => (p.includes(d) ? p.filter(x => x !== d) : [...p, d].sort()));
-  const dirty = name !== med.name || time !== schedule.time || JSON.stringify(days) !== JSON.stringify(schedule.daysOfWeek);
+  const setTimeAt = (i: number, v: string) => setTimes(p => p.map((t, idx) => (idx === i ? v : t)));
+  const addTime = () => setTimes(p => [...p, '12:00']);
+  const removeTime = (i: number) => setTimes(p => (p.length > 1 ? p.filter((_, idx) => idx !== i) : p));
+
+  const dirty =
+    name !== med.name ||
+    JSON.stringify(days) !== JSON.stringify(schedule.daysOfWeek) ||
+    mode !== (schedule.source === 'auto' ? 'auto' : 'user') ||
+    JSON.stringify(req) !== JSON.stringify(requirements) ||
+    (mode === 'user' && JSON.stringify(times) !== JSON.stringify(schedule.times));
 
   const save = async () => {
     setSaving(true);
     try {
-      await onSave({ name: name.trim() || med.name, time, daysOfWeek: days, window: schedule.window, reason: schedule.reason, source, rxcui: schedule.rxcui });
+      await onSave({
+        name: name.trim() || med.name,
+        daysOfWeek: days,
+        window: schedule.window,
+        reason: schedule.reason,
+        rxcui: schedule.rxcui,
+        requirements: req,
+        ...(mode === 'auto'
+          ? { source: 'auto' }
+          : { source: 'user', times: [...times].sort() }),
+      });
       setSaved(true); setTimeout(() => setSaved(false), 1500);
     } finally { setSaving(false); }
   };
@@ -257,23 +289,10 @@ function MedicationScheduleCard({
         )}
       </div>
 
-      {schedule.window && (
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-stone-200 text-xs text-stone-600 mb-4">
-          {WINDOW_ICON[schedule.window]}
-          {schedule.window[0].toUpperCase() + schedule.window.slice(1)}
-          {schedule.source === 'ai' && <span className="text-tide-600">· AI-suggested</span>}
-        </div>
-      )}
-      {schedule.reason && <p className="text-sm text-stone-500 mb-4 leading-relaxed">{schedule.reason}</p>}
-
-      <div className="flex flex-wrap items-end gap-6">
+      <div className="flex flex-wrap items-end gap-6 mb-5">
         <div>
           <label className="block text-xs text-stone-500 mb-1">Name</label>
           <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} className={`${inputCls} w-44`} />
-        </div>
-        <div>
-          <label className="block text-xs text-stone-500 mb-1">Time</label>
-          <input type="time" value={time} onChange={(e) => { setTime(e.target.value); setSource('user'); }} className={inputCls} />
         </div>
         <div>
           <label className="block text-xs text-stone-500 mb-1">Days</label>
@@ -288,6 +307,45 @@ function MedicationScheduleCard({
         </div>
       </div>
 
+      <RequirementsEditor req={req} onChange={setReq} />
+
+      {/* Auto vs manual times */}
+      <div className="mt-5">
+        <div className="flex gap-2 mb-3">
+          <button onClick={() => setMode('auto')}
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-[12px] border text-sm transition-all ${mode === 'auto' ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+            <Sparkles className="w-4 h-4" /> Auto times
+          </button>
+          <button onClick={() => setMode('user')}
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-[12px] border text-sm transition-all ${mode === 'user' ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+            <Hand className="w-4 h-4" /> Set times myself
+          </button>
+        </div>
+
+        {mode === 'auto' ? (
+          <p className="text-sm text-stone-500">
+            We generate dose times from these requirements and your routine.
+            {' '}Currently: <span className="text-stone-800 font-medium">{fmtTimes(schedule.times)}</span>.
+            {schedule.source !== 'auto' && <span className="text-tide-600"> Saving switches this medication to auto times.</span>}
+          </p>
+        ) : (
+          <div>
+            <label className="block text-xs text-stone-500 mb-2">Dose times</label>
+            <div className="flex flex-wrap gap-2">
+              {times.map((t, i) => (
+                <div key={i} className="inline-flex items-center gap-1 bg-stone-50 border border-stone-200 rounded-[12px] pl-2 pr-1 py-1">
+                  <input type="time" value={t} onChange={(e) => setTimeAt(i, e.target.value)} className="bg-transparent text-sm text-stone-900 focus:outline-none" />
+                  {times.length > 1 && (
+                    <button onClick={() => removeTime(i)} className="text-stone-400 hover:text-danger p-1"><Trash2 className="w-3.5 h-3.5" /></button>
+                  )}
+                </div>
+              ))}
+              <button onClick={addTime} className={btnGhost}><Plus className="w-4 h-4" /> Add time</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="mt-5 flex items-center gap-3">
         <button onClick={save} disabled={saving || !dirty || days.length === 0} className={btnPrimary}>
           {saved ? <><Check className="w-4 h-4" /> Saved</> : saving ? 'Saving…' : 'Save schedule'}
@@ -299,11 +357,61 @@ function MedicationScheduleCard({
 }
 
 // --------------------------------------------------------------------------- //
+function RequirementsEditor({ req, onChange }: { req: Requirements; onChange: (r: Requirements) => void }) {
+  const set = (patch: Partial<Requirements>) => onChange({ ...req, ...patch });
+  return (
+    <div className="rounded-2xl border border-stone-200 bg-stone-50/50 p-4">
+      <div className="flex flex-wrap gap-6">
+        <div>
+          <label className="block text-xs text-stone-500 mb-1">Doses per day</label>
+          <div className="flex gap-1.5">
+            {[1, 2, 3, 4].map((n) => (
+              <button key={n}
+                onClick={() => set({ dosesPerDay: n, bedtimeOnly: n === 1 ? req.bedtimeOnly : false })}
+                className={`w-9 h-9 rounded-[10px] text-sm font-medium border transition-all ${req.dosesPerDay === n ? 'bg-tide-500 border-tide-500 text-white' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-stone-500 mb-1">Food rule</label>
+          <select value={req.foodRequirement} onChange={(e) => set({ foodRequirement: e.target.value as FoodRequirement })} className={inputCls}>
+            {FOOD_VALUES.map(v => <option key={v} value={v}>{FOOD_LABEL[v]}</option>)}
+          </select>
+        </div>
+        {req.dosesPerDay >= 2 && (
+          <div>
+            <label className="block text-xs text-stone-500 mb-1">Min. spacing (hrs)</label>
+            <input
+              type="number" min={0} max={24} step={0.5}
+              value={req.minSpacingMinutes != null ? req.minSpacingMinutes / 60 : ''}
+              placeholder="—"
+              onChange={(e) => set({ minSpacingMinutes: e.target.value === '' ? null : Math.round(Number(e.target.value) * 60) })}
+              className={`${inputCls} w-24`}
+            />
+          </div>
+        )}
+        {req.dosesPerDay === 1 && (
+          <div className="flex items-end">
+            <button
+              onClick={() => set({ bedtimeOnly: !req.bedtimeOnly })}
+              className={`inline-flex items-center gap-2 px-3 py-2 rounded-[12px] border text-sm transition-all ${req.bedtimeOnly ? 'bg-tide-50 border-tide-300 text-tide-700' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+              <Moon className="w-4 h-4" /> Bedtime only
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
 function AddMedicationCard({ onAdd }: { onAdd: (b: MedicationInput) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const [time, setTime] = useState('08:00');
   const [days, setDays] = useState<number[]>(ALL_DAYS);
+  const [req, setReq] = useState<Requirements>({ dosesPerDay: 1, foodRequirement: 'none', bedtimeOnly: false, minSpacingMinutes: null });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -315,8 +423,9 @@ function AddMedicationCard({ onAdd }: { onAdd: (b: MedicationInput) => Promise<v
     if (days.length === 0) { setErr('Pick at least one day.'); return; }
     setBusy(true);
     try {
-      await onAdd({ name: name.trim(), time, daysOfWeek: days, window: null, reason: null, source: 'user', rxcui: null });
-      setName(''); setTime('08:00'); setDays(ALL_DAYS); setOpen(false);
+      // New meds default to auto times generated from requirements + routine.
+      await onAdd({ name: name.trim(), requirements: req, daysOfWeek: days, window: null, reason: null, source: 'auto', rxcui: null });
+      setName(''); setDays(ALL_DAYS); setReq({ dosesPerDay: 1, foodRequirement: 'none', bedtimeOnly: false, minSpacingMinutes: null }); setOpen(false);
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
   };
@@ -332,29 +441,30 @@ function AddMedicationCard({ onAdd }: { onAdd: (b: MedicationInput) => Promise<v
       </div>
 
       {open && (
-        <div className="mt-4 flex flex-wrap items-end gap-4">
-          <div>
-            <label className="block text-xs text-stone-500 mb-1">Name</label>
-            <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Metformin" className={`${inputCls} w-44`} />
-          </div>
-          <div>
-            <label className="block text-xs text-stone-500 mb-1">Time</label>
-            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-xs text-stone-500 mb-1">Days</label>
-            <div className="flex gap-1.5">
-              {DAY_FULL.map((lbl, idx) => (
-                <button key={idx} onClick={() => toggle(idx)}
-                  className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
-                  {lbl[0]}
-                </button>
-              ))}
+        <div className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-xs text-stone-500 mb-1">Name</label>
+              <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Metformin" className={`${inputCls} w-44`} />
+            </div>
+            <div>
+              <label className="block text-xs text-stone-500 mb-1">Days</label>
+              <div className="flex gap-1.5">
+                {DAY_FULL.map((lbl, idx) => (
+                  <button key={idx} onClick={() => toggle(idx)}
+                    className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${days.includes(idx) ? 'bg-tide-500 border-tide-500 text-white' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+                    {lbl[0]}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          <button onClick={add} disabled={busy} className={btnPrimary}>{busy ? 'Adding…' : 'Add medication'}</button>
-          <button onClick={() => { setOpen(false); setErr(null); }} className={btnGhost}>Cancel</button>
-          {err && <p className="text-xs text-danger w-full">{err}</p>}
+          <RequirementsEditor req={req} onChange={setReq} />
+          <div className="flex items-center gap-3">
+            <button onClick={add} disabled={busy} className={btnPrimary}>{busy ? 'Adding…' : 'Add medication'}</button>
+            <button onClick={() => { setOpen(false); setErr(null); }} className={btnGhost}>Cancel</button>
+          </div>
+          {err && <p className="text-xs text-danger">{err}</p>}
         </div>
       )}
     </div>
@@ -388,7 +498,7 @@ function DayOverridesCard({
         <div className="space-y-2 mb-4">
           {entries.map(([wd, t]) => (
             <div key={wd} className="flex items-center justify-between bg-stone-50 border border-stone-200 rounded-xl px-4 py-2">
-              <span className="text-sm text-stone-900">{DAY_FULL[Number(wd)]} → {fmtTime(t)}</span>
+              <span className="text-sm text-stone-900">{DAY_FULL[Number(wd)]} → {fmtTimes(t)}</span>
               <button onClick={() => void onRemove(Number(wd))} className="text-stone-500 hover:text-danger transition-colors"><Trash2 className="w-4 h-4" /></button>
             </div>
           ))}
@@ -519,6 +629,17 @@ function DateOverridesCard({
 }
 
 // --------------------------------------------------------------------------- //
+const SCHEDULE_TYPE_LABEL: Record<ScheduleType, string> = {
+  same: 'Same every day',
+  weekday_weekend: 'Weekdays vs weekends',
+  per_day: 'Varies by day',
+};
+
+const emptyDayRoutine = (base: DayRoutine): DayRoutine => ({
+  wakeTime: base.wakeTime, sleepTime: base.sleepTime, withFood: base.withFood,
+  mealTimes: { ...base.mealTimes },
+});
+
 function RoutineCard({
   routine, onSave,
 }: {
@@ -528,7 +649,23 @@ function RoutineCard({
   const [r, setR] = useState(routine);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  useEffect(() => { setR(routine); }, [routine]);
   const dirty = JSON.stringify(r) !== JSON.stringify(routine);
+
+  const setType = (t: ScheduleType) =>
+    setR(prev => ({
+      ...prev,
+      scheduleType: t,
+      weekendRoutine: t === 'weekday_weekend' ? (prev.weekendRoutine ?? emptyDayRoutine(prev)) : prev.weekendRoutine,
+    }));
+
+  const toggleDay = (d: number) =>
+    setR(prev => {
+      const next = { ...prev.dayRoutines };
+      if (next[d]) delete next[d];
+      else next[d] = emptyDayRoutine(prev);
+      return { ...prev, dayRoutines: next };
+    });
 
   const save = async () => {
     setSaving(true);
@@ -542,28 +679,55 @@ function RoutineCard({
         <Utensils className="w-5 h-5 text-tide-600" />
         <h2 className="text-lg font-semibold text-stone-900">Your routine</h2>
       </div>
-      <p className="text-sm text-stone-500 mb-4">Shared across all your medications. Changing your wake/sleep time automatically re-times AI-suggested doses.</p>
+      <p className="text-sm text-stone-500 mb-4">Shared across all your medications. Auto-timed doses re-anchor to these times — including any day-specific routines below.</p>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Field label="Wake"><input type="time" value={r.wakeTime} onChange={(e) => setR(p => ({ ...p, wakeTime: e.target.value }))} className={`${inputCls} w-full`} /></Field>
-        <Field label="Sleep"><input type="time" value={r.sleepTime} onChange={(e) => setR(p => ({ ...p, sleepTime: e.target.value }))} className={`${inputCls} w-full`} /></Field>
-      </div>
+      <DayRoutineEditor value={r} onChange={(patch) => setR(p => ({ ...p, ...patch }))} />
 
-      <div onClick={() => setR(p => ({ ...p, withFood: !p.withFood }))}
-        className={`cursor-pointer mt-4 p-3 rounded-xl border flex items-center gap-3 ${r.withFood ? 'bg-tide-50 border-tide-300' : 'bg-stone-50 border-stone-200'}`}>
-        <span className="flex-1 text-sm text-stone-900">Take with food</span>
-        <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${r.withFood ? 'bg-tide-500 border-tide-500' : 'border-stone-300'}`}>{r.withFood && <Check className="w-3 h-3 text-white" />}</div>
-      </div>
-
-      {r.withFood && (
-        <div className="grid grid-cols-3 gap-3 mt-4">
-          {(['breakfast', 'lunch', 'dinner'] as const).map(meal => (
-            <Field key={meal} label={meal[0].toUpperCase() + meal.slice(1)}>
-              <input type="time" value={r.mealTimes[meal]} onChange={(e) => setR(p => ({ ...p, mealTimes: { ...p.mealTimes, [meal]: e.target.value } }))} className={`${inputCls} w-full`} />
-            </Field>
+      {/* Variable weekly schedule */}
+      <div className="mt-6 pt-5 border-t border-stone-200">
+        <div className="flex items-center gap-2 mb-3">
+          <CalendarDays className="w-4 h-4 text-apricot-600" />
+          <span className="text-sm font-medium text-stone-800">Does your schedule change by day of week?</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {(Object.keys(SCHEDULE_TYPE_LABEL) as ScheduleType[]).map((t) => (
+            <button key={t} onClick={() => setType(t)}
+              className={`py-2.5 px-2 rounded-[14px] border text-xs font-medium transition-all ${r.scheduleType === t ? 'bg-apricot-50 border-apricot-300 text-apricot-700' : 'bg-stone-50 border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+              {SCHEDULE_TYPE_LABEL[t]}
+            </button>
           ))}
         </div>
-      )}
+
+        {r.scheduleType === 'weekday_weekend' && r.weekendRoutine && (
+          <div className="mt-4 rounded-2xl border border-apricot-200 bg-apricot-50/40 p-4">
+            <div className="flex items-center gap-2 mb-3"><Moon className="w-4 h-4 text-apricot-600" /><h3 className="text-sm font-semibold text-stone-800">Weekend routine (Sat–Sun)</h3></div>
+            <DayRoutineEditor value={r.weekendRoutine} onChange={(patch) => setR(p => ({ ...p, weekendRoutine: { ...p.weekendRoutine!, ...patch } }))} />
+          </div>
+        )}
+
+        {r.scheduleType === 'per_day' && (
+          <div className="mt-4 rounded-2xl border border-apricot-200 bg-apricot-50/40 p-4">
+            <p className="text-xs text-stone-500 mb-3">Tap a day to give it its own routine. Untapped days use the routine above.</p>
+            <div className="flex gap-2 mb-3">
+              {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((lbl, idx) => (
+                <button key={idx} onClick={() => toggleDay(idx)}
+                  className={`w-9 h-9 rounded-full text-xs font-medium border transition-all ${r.dayRoutines[idx] ? 'bg-apricot-500 border-apricot-500 text-white' : 'bg-white border-stone-200 text-stone-500 hover:bg-stone-100'}`}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            {Object.keys(r.dayRoutines).map(Number).sort().map((d) => (
+              <div key={d} className="rounded-xl border border-stone-200 bg-white p-3 mb-2">
+                <p className="text-xs font-semibold text-stone-700 mb-2">{DAY_FULL[d]}</p>
+                <DayRoutineEditor
+                  value={r.dayRoutines[d]}
+                  onChange={(patch) => setR(p => ({ ...p, dayRoutines: { ...p.dayRoutines, [d]: { ...p.dayRoutines[d], ...patch } } }))}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="mt-5">
         <button onClick={save} disabled={saving || !dirty} className={btnPrimary}>
@@ -571,6 +735,24 @@ function RoutineCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function DayRoutineEditor({ value, onChange }: { value: DayRoutine; onChange: (patch: Partial<DayRoutine>) => void }) {
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Field label="Wake"><input type="time" value={value.wakeTime} onChange={(e) => onChange({ wakeTime: e.target.value })} className={`${inputCls} w-full`} /></Field>
+        <Field label="Sleep"><input type="time" value={value.sleepTime} onChange={(e) => onChange({ sleepTime: e.target.value })} className={`${inputCls} w-full`} /></Field>
+      </div>
+      <div className="grid grid-cols-3 gap-3 mt-3">
+        {(['breakfast', 'lunch', 'dinner'] as const).map(meal => (
+          <Field key={meal} label={meal[0].toUpperCase() + meal.slice(1)}>
+            <input type="time" value={value.mealTimes[meal]} onChange={(e) => onChange({ mealTimes: { ...value.mealTimes, [meal]: e.target.value } })} className={`${inputCls} w-full`} />
+          </Field>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -596,7 +778,15 @@ function UpcomingCard({ upcoming, medName }: { upcoming: import('../lib/store').
             <div key={u.date} className={`rounded-xl border p-3 text-center ${u.skipped ? 'bg-stone-100 border-stone-200' : 'bg-tide-50 border-tide-200'}`}>
               <div className="text-xs text-stone-500">{d.toLocaleDateString([], { weekday: 'short' })}</div>
               <div className="text-xs text-stone-400 mb-1">{d.getDate()}</div>
-              <div className={`text-sm font-medium ${u.skipped ? 'text-stone-400' : 'text-stone-900'}`}>{u.skipped ? '—' : fmtTime(u.time)}</div>
+              {u.skipped ? (
+                <div className="text-sm font-medium text-stone-400">—</div>
+              ) : (
+                <div className="space-y-0.5">
+                  {u.times.map((t, i) => (
+                    <div key={i} className="text-xs font-medium text-stone-900 leading-tight">{fmtTime(t)}</div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}

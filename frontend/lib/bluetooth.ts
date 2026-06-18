@@ -26,10 +26,16 @@ export function isWebBluetoothSupported(): boolean {
  *
  * @param onDisconnect called when the link drops (device powered off / out of
  *        range). This is how we detect disconnections.
+ * @param onMessage called with the decoded characteristic value every time the
+ *        device notifies — both heartbeats ("ok") and button presses ("taken").
+ *        Callers decide which messages to act on.
  * @throws if Web Bluetooth is unsupported, the user cancels the picker, or the
  *         GATT connection fails. Callers should catch and surface this.
  */
-export async function connectToDevice(onDisconnect: () => void): Promise<BleConnection> {
+export async function connectToDevice(
+  onDisconnect: () => void,
+  onMessage?: (value: string) => void,
+): Promise<BleConnection> {
   if (!isWebBluetoothSupported()) {
     throw new Error('Web Bluetooth is not supported in this browser.');
   }
@@ -50,12 +56,20 @@ export async function connectToDevice(onDisconnect: () => void): Promise<BleConn
   const service = await server.getPrimaryService(SERVICE_UUID);
   const statusChar = await service.getCharacteristic(STATUS_CHAR_UUID);
 
-  // Subscribe to the heartbeat so the link is observably live (and ready for
-  // real data later). Failure here shouldn't fail the whole connection.
+  // Subscribe to notifications so the link is observably live AND so physical
+  // button presses reach the app. Failure here shouldn't fail the whole
+  // connection — the manual on-screen controls still work without it.
   try {
+    if (onMessage) {
+      statusChar.addEventListener('characteristicvaluechanged', (event) => {
+        const target = event.target as BluetoothRemoteGATTCharacteristic;
+        if (!target.value) return;
+        onMessage(new TextDecoder().decode(target.value));
+      });
+    }
     await statusChar.startNotifications();
   } catch {
-    // notifications are best-effort for a status-only build
+    // notifications are best-effort; manual controls remain available
   }
 
   return { device, server };

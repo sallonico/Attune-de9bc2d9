@@ -162,8 +162,82 @@ def test_legacy_migration():
     legacy = {"name": "x", "medication": "y", "scheduleTime": "09:15"}
     sched = s.ensure_schedule(legacy)
     check("migrates flat scheduleTime", sched["time"], "09:15")
+    check("flat scheduleTime fills times list", sched["times"], ["09:15"])
     check("defaults to every day", sched["daysOfWeek"], [0, 1, 2, 3, 4, 5, 6])
     check("empty profile is safe", s.ensure_schedule(None)["time"], "08:00")
+
+    # A pre-multi-dose schedule with a single ``time`` migrates to a times list,
+    # and a string dayOverride becomes a one-element list.
+    single = {"schedule": {"time": "07:30", "dayOverrides": {"5": "10:00"}}}
+    mig = s.ensure_schedule(single)
+    check("single time -> times list", mig["times"], ["07:30"])
+    check("string day override -> list", mig["dayOverrides"]["5"], ["10:00"])
+
+
+def test_requirements_generation():
+    print("generate_dose_times from requirements")
+    day = {"wakeTime": "07:00", "sleepTime": "23:00", "withFood": True,
+           "mealTimes": {"breakfast": "08:00", "lunch": "12:30", "dinner": "18:30"}}
+
+    once = s.generate_dose_times({"dosesPerDay": 1, "foodRequirement": "with_food"}, day)
+    check("1x with food -> breakfast", once, ["08:00"])
+
+    twice = s.generate_dose_times({"dosesPerDay": 2, "foodRequirement": "with_food"}, day)
+    check("2x with food -> breakfast + dinner", twice, ["08:00", "18:30"])
+
+    thrice = s.generate_dose_times({"dosesPerDay": 3, "foodRequirement": "with_food"}, day)
+    check("3x with food -> all meals", thrice, ["08:00", "12:30", "18:30"])
+
+    before = s.generate_dose_times({"dosesPerDay": 1, "foodRequirement": "before_meals"}, day)
+    check("before meals = breakfast - 30", before, ["07:30"])
+
+    after = s.generate_dose_times({"dosesPerDay": 1, "foodRequirement": "after_meals"}, day)
+    check("after meals = breakfast + 30", after, ["08:30"])
+
+    bed = s.generate_dose_times({"dosesPerDay": 1, "bedtimeOnly": True}, day)
+    check("bedtime only = sleep - 30", bed, ["22:30"])
+
+    none1 = s.generate_dose_times({"dosesPerDay": 1, "foodRequirement": "none"}, day)
+    check("1x none -> single morning-ish dose", len(none1), 1)
+    none2 = s.generate_dose_times({"dosesPerDay": 2, "foodRequirement": "none"}, day)
+    check("2x none -> two spread doses", len(none2), 2)
+
+
+def test_auto_resolution_uses_day_routine():
+    print("auto medication re-derives times per day's routine")
+    routine = {
+        **s.default_routine(),
+        "scheduleType": "weekday_weekend",
+        "wakeTime": "06:30", "sleepTime": "22:30",
+        "mealTimes": {"breakfast": "07:00", "lunch": "12:00", "dinner": "18:00"},
+        "weekendRoutine": {
+            "wakeTime": "09:00", "sleepTime": "00:00", "withFood": True,
+            "mealTimes": {"breakfast": "10:00", "lunch": "14:00", "dinner": "19:00"},
+        },
+    }
+    routine = s.ensure_routine({"routine": routine})
+    req = {"dosesPerDay": 1, "foodRequirement": "with_food"}
+    sched = s.default_schedule(source="auto")
+
+    weekday = s.resolve_times_for_date(sched, routine, MON, req)
+    check("weekday breakfast dose", weekday, ["07:00"])
+    sat = s.resolve_times_for_date(sched, routine, SAT, req)
+    check("weekend breakfast dose shifts later", sat, ["10:00"])
+
+    # Manual (source != auto) meds ignore requirements and use stored times.
+    manual = s.default_schedule(times=["08:00", "20:00"], source="user")
+    check("manual multi-dose uses stored times",
+          s.resolve_times_for_date(manual, routine, MON), ["08:00", "20:00"])
+
+
+def test_multi_dose_next_due():
+    print("next_due across multiple daily doses")
+    routine = s.default_routine()
+    sched = s.default_schedule(times=["08:00", "20:00"])
+    # Mon 09:00 — morning dose passed, evening dose still ahead today.
+    now = datetime(2026, 5, 25, 9, 0, tzinfo=timezone.utc)
+    nd = s.next_due(sched, routine, now)
+    check("rolls to this evening's dose", nd, datetime(2026, 5, 25, 20, 0, tzinfo=timezone.utc))
 
 
 def main():
@@ -176,7 +250,9 @@ def main():
         test_next_due,
         test_timezone,
         test_legacy_migration,
-        test_label_extraction,
+        test_requirements_generation,
+        test_auto_resolution_uses_day_routine,
+        test_multi_dose_next_due,
     ):
         fn()
     print(f"\n{PASS} passed, {FAIL} failed")
