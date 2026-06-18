@@ -108,7 +108,7 @@ export default function CaregiverView({
         <div>
           <h1 className="text-3xl font-bold text-stone-900 tracking-tight flex items-center gap-3">
             <Users className="w-8 h-8 text-tide-600" />
-            Caregiver Dashboard
+            Caregiver dashboard
           </h1>
           <p className="text-stone-500 mt-1">
             Monitoring adherence and wellness for {summary.patientName}
@@ -116,7 +116,7 @@ export default function CaregiverView({
         </div>
         <div className="flex items-center gap-2 px-3 py-1.5 bg-success-subtle border border-success/20 rounded-full text-success text-sm font-medium">
           <ShieldCheck className="w-4 h-4" />
-          Access Active
+          Access active
         </div>
       </div>
 
@@ -125,15 +125,15 @@ export default function CaregiverView({
         {/* Patient Overview Card */}
         <div className="lg:col-span-2 bg-white backdrop-blur-xl border border-stone-200 rounded-3xl p-6 md:p-8">
           <div className="flex items-center justify-between mb-8">
-            <h2 className="text-xl font-semibold text-stone-900">30-Day Overview</h2>
+            <h2 className="text-xl font-semibold text-stone-900">30-day overview</h2>
             <span className="text-sm text-stone-500">Updated just now</span>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
             <StatBox label="Adherence" value={`${summary.adherence}%`} color="text-tide-600" />
-            <StatBox label="Missed Doses" value={String(summary.missedDoses)} color="text-danger" />
-            <StatBox label="Avg Physical" value={`${summary.avgPhysical}/5`} color="text-info" />
-            <StatBox label="Avg Mood" value={`${summary.avgMood}/5`} color="text-apricot-600" />
+            <StatBox label="Missed doses" value={String(summary.missedDoses)} color="text-danger" />
+            <StatBox label="Avg physical" value={`${summary.avgPhysical}/5`} color="text-info" />
+            <StatBox label="Avg mood" value={`${summary.avgMood}/5`} color="text-apricot-600" />
           </div>
 
           {summary.alert && (
@@ -151,7 +151,7 @@ export default function CaregiverView({
         <div className="bg-white backdrop-blur-xl border border-stone-200 rounded-3xl p-6">
           <h2 className="text-xl font-semibold text-stone-900 mb-6 flex items-center gap-2">
             <Activity className="w-5 h-5 text-stone-500" />
-            Recent Activity
+            Recent activity
           </h2>
 
           <div className="space-y-4">

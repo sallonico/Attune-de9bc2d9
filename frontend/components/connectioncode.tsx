@@ -145,7 +145,7 @@ export default function ConnectionCode() {
 
       {!accessEnabled && (
         <p className="mt-4 text-xs text-stone-400">
-          Tip: enable <span className="text-stone-600">Caregiver Dashboard</span> sharing in your
+          Tip: enable <span className="text-stone-600">Caregiver dashboard</span> sharing in your
           settings so connected caregivers can view your adherence data.
         </p>
       )}
